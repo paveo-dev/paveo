@@ -1,0 +1,84 @@
+# A release is a signed tag pushed to the public repository, and nothing else
+# publishes (THREAT_MODEL §5): PyPI trusts this workflow, in this repository,
+# in the `pypi` environment, and no token exists for a laptop to hold. The
+# environment waits for the maintainer's approval before anything uploads, and
+# allows only `v*` tags; both are settings, not YAML (the R1 card lists them).
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  # The gate runs apart from the build. It installs the test tools, which are
+  # not pinned by hash, and runs them; the build job never has them, so nothing
+  # they could do reaches the files it packages (/security-review, D67).
+  check:
+    if: github.repository == 'paveo-dev/paveo'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      # The whole gate, and the price tables no older than 30 days (D43).
+      - run: make dev
+      - run: make release-check
+  build:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: The tagged commit is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: The tag names the version being built
+        run: |
+          version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, version $version"; exit 1; }
+          # pip skips pre-releases unless asked: a first release tagged .dev0 would install for no one
+          echo "$version" | grep -Eqx '[0-9]+(\.[0-9]+)*(\.post[0-9]+)?' || { echo "version $version is a pre-release"; exit 1; }
+      - name: Build with hash-pinned tools only
+        run: |
+          python -m venv /tmp/build
+          /tmp/build/bin/pip install --require-hashes --no-deps -r .github/requirements-build.txt
+          /tmp/build/bin/python -m build --no-isolation --outdir dist .
+      - run: python .github/sbom.py dist sbom/paveo.cdx.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release
+          path: |
+            dist/
+            sbom/
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release
+      # Trusted publishing, with a provenance attestation for every file.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release
+      - name: Attach the files and the SBOM to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* sbom/* --repo "$GITHUB_REPOSITORY" --verify-tag --notes "Published to PyPI from this tag by .github/workflows/release.yml."

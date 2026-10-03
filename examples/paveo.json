@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "policy_id": "refund-bot-example",
+
+  "defaults": {
+    "decision": "deny",
+    "fail_open": false
+  },
+
+  "agents": [
+    {
+      "id": "refund-bot",
+      "budget": { "period": "day", "limit_usd": "50.00" },
+      "models": { "allow": ["claude-sonnet-5"] },
+      "tools": {
+        "allow": [
+          { "name": "lookup_order" },
+          {
+            "name": "refund",
+            "constraints": {
+              "amount_usd": { "max": "500.00" },
+              "currency": { "in": ["USD", "EUR"] },
+              "note": {}
+            }
+          }
+        ],
+        "deny": ["transfer_funds"]
+      }
+    }
+  ]
+}

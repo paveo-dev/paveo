@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "policy_id": "starter-finance-ops",
+  "agents": [
+    {
+      "id": "finance-ops",
+      "budget": {
+        "period": "day",
+        "limit_usd": "10.00"
+      },
+      "models": {
+        "allow": [
+          "claude-sonnet-5"
+        ]
+      },
+      "tools": {
+        "allow": [
+          {
+            "name": "read_ledger"
+          },
+          {
+            "name": "create_invoice",
+            "constraints": {
+              "customer_id": {
+                "matches": "C-[0-9]{6,10}"
+              },
+              "amount_usd": {
+                "max": "5000.00",
+                "min": "0.01"
+              },
+              "currency": {
+                "in": [
+                  "USD",
+                  "EUR"
+                ]
+              },
+              "memo": {}
+            }
+          },
+          {
+            "name": "issue_payment",
+            "constraints": {
+              "payee_id": {
+                "matches": "V-[0-9]{6}"
+              },
+              "amount_usd": {
+                "max": "1000.00",
+                "min": "0.01"
+              },
+              "currency": {
+                "equals": "USD"
+              },
+              "memo": {}
+            },
+            "repeat": {
+              "seconds": 3600,
+              "same": [
+                "payee_id"
+              ]
+            }
+          }
+        ],
+        "deny": [
+          "change_bank_details",
+          "add_payee",
+          "approve_payment",
+          "delete_ledger_entry"
+        ]
+      }
+    }
+  ]
+}

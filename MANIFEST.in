@@ -1,0 +1,12 @@
+# The sdist must be able to run its own gate (Rule 19: clone to green tests in
+# one command). setuptools' default manifest ships test*.py but not conftest.py,
+# which every test file imports, so an unpacked sdist failed at collection.
+include LICENSE
+include SECURITY.md
+include Makefile
+include MANIFEST.in
+recursive-include tests *.py
+prune tests/maintainer
+recursive-include examples *.py *.json
+# Named, not globbed: only the published docs belong in a release.
+include docs/SPEC_V1.md docs/THREAT_MODEL.md docs/PRICES.md docs/SECURITY_REVIEW.md

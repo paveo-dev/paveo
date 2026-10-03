@@ -1,0 +1,143 @@
+# setuptools, not hatchling, and for a reason worth writing down: hatchling's
+# editable install writes a `.pth` file flagged UF_HIDDEN on macOS, and since
+# Python 3.13 `site.addpackage` silently skips hidden `.pth` files. The result is
+# a `pip install -e .` that reports success and leaves the package unimportable,
+# with no error anywhere. Boring beats clever (Rule 12).
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paveo"
+version = "0.1.0"
+description = "Admission control for AI agent calls — decides whether the next call is allowed to leave, in your own process."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "MD Faiz Jamal" }]
+# Source-available, not open source: readable and embeddable, but not resellable
+# as a hosted service. Chosen over BSL 1.1 because BSL converts itself to open
+# source on a date you must maintain per release. See D22.
+license = "Elastic-2.0"
+license-files = ["LICENSE"]
+keywords = ["agents", "admission-control", "budget", "policy", "llm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    # The audit log needs flock, pwrite and fchmod (D49).
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Security",
+    # Without this and src/paveo/py.typed, PEP 561 says we are untyped: a
+    # downstream mypy resolves `from paveo import Paveo` to Any, silently erasing
+    # the strictness the gate enforces here.
+    "Typing :: Typed",
+]
+
+# Zero required runtime dependencies. This is a locked decision (#6,
+# THREAT_MODEL.md §5) and not a starting point: our own supply chain is the
+# gravest threat we pose to a customer, and nothing here can be compromised
+# transitively. Provider SDKs and tokenizers become extras in the chunks that
+# import them, never before.
+dependencies = []
+
+# The Claude Code seatbelt, `paveo stop` and `paveo resume` (D49). Standard
+# library only, like the rest.
+[project.scripts]
+paveo = "paveo.cli:main"
+
+[project.optional-dependencies]
+# Bounded, because the verification gate is only a gate if it gives the same
+# answer on a clean machine (Rule 19). An unpinned formatter turns "the gate
+# passes" into "the gate passed on whatever I happened to have installed".
+dev = [
+    "pytest>=9,<10",
+    "hypothesis>=6,<7",
+    "mypy>=2.3,<3",
+    "ruff>=0.16,<0.17",
+    "cryptography>=45,<51",
+]
+# The paid tier: verifying a licence key's signature needs a real Ed25519
+# implementation, and one written here would be the riskiest code in the
+# package. So it is the one dependency, and only for those who buy (D61, D62).
+# The free core imports nothing from it.
+team = ["cryptography>=45,<51"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# py.typed is data, not code, so it is not installed unless it is named.
+[tool.setuptools.package-data]
+# The starter policies ship in the wheel, so `paveo init` can install one (D50).
+paveo = ["py.typed", "starters/*.json"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+src = ["src", "tests"]
+# Ruff formats Python inside Markdown fences. The docs are documents: their
+# snippets are aligned for a reader, and the spec is not ours to reflow.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+# This block is a security control, not a style file. The rules below are how
+# "no silent failures" (Rule 15) and "no eval, exec or pickle" (SPEC_V1.md §9)
+# stop depending on anyone remembering them.
+select = [
+    "E",   # pycodestyle
+    "W",
+    "F",   # pyflakes
+    "I",   # import order
+    "N",   # naming
+    "UP",  # pyupgrade
+    "B",   # bugbear — includes B904, "raise ... from" inside an except
+    "A",   # shadowed builtins
+    "C4",  # comprehensions
+    "S",   # bandit — S102 exec, S301 pickle, S307 eval, S110 try/except/pass
+    "PT",  # pytest style
+    "RET",
+    "SIM",
+    "TID",
+    "ARG",
+    "PL",  # pylint
+    "TRY", # exception antipatterns
+    "RUF",
+]
+ignore = [
+    "TRY003", # long messages in raise: SPEC_V1.md §8 requires errors that say
+              # how to fix them, which is the opposite of this rule's advice.
+]
+
+[tool.ruff.lint.isort]
+# `conftest` is this repo's own test helper module, not a third-party package.
+known-first-party = ["paveo", "conftest"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert; that is their job. SIM117 wants `pytest.raises` flattened into
+# the surrounding resource `with`, which makes a test *less* precise about which
+# statement is expected to raise. Nothing else is relaxed for them.
+"tests/*" = ["S101", "PLR2004", "SIM117"]
+# N818 wants every exception named `...Error`. SPEC_V1.md §3 and §8 name this
+# taxonomy exactly — `PolicyDenied`, `BudgetExceeded`, `PolicyUnavailable`,
+# `PricingUnknown` — and every public symbol is a permanent commitment
+# (Rule 12). They also read correctly where they are used: `except PolicyDenied`.
+"src/paveo/errors.py" = ["N818"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+# `Any` is banned outright (Rule 18.2). The load-bearing consequence: json.loads
+# hands back Any, so a policy document has to be typed `object` and narrowed with
+# isinstance before anything reads it — which is how untrusted input should be
+# validated anyway. The type checker makes the argument so a reviewer doesn't
+# have to.
+disallow_any_explicit = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers --strict-config"
+# The suite runs from a fresh clone without installing anything first (Rule 19).
+pythonpath = ["src"]

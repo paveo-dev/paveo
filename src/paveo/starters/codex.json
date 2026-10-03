@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "policy_id": "starter-codex-production-repo",
+  "agents": [
+    {
+      "id": "codex",
+      "tools": {
+        "allow": [
+          {
+            "name": "Bash",
+            "constraints": {
+              "command": {
+                "not_matches": [
+                  "\\brm\\s+-[a-z]*(?:r[a-z]*f|f[a-z]*r)",
+                  "\\brm\\s[^\\n]{0,100}--recursive",
+                  "\\bgit\\s+push\\b[^\\n]{0,100}(?:--force|\\s-f\\b)",
+                  "\\bgit\\s+reset\\s+--hard",
+                  "\\bgit\\s+clean\\s+-[a-z]*f",
+                  "\\b(?:drop|truncate)\\s+(?:table|database|schema)",
+                  "\\bterraform\\s+destroy",
+                  "\\bkubectl\\s+delete",
+                  "\\bmkfs",
+                  "\\.pave",
+                  "\\.codex(?:$|[^a-z0-9_])",
+                  "hooks\\.json",
+                  "\\bpaveo\\s+resume"
+                ]
+              }
+            }
+          },
+          {
+            "name": "apply_patch",
+            "constraints": {
+              "command": {},
+              "paths": {
+                "not_matches": [
+                  "\\.pave",
+                  "\\.codex(?:$|[^a-z0-9_])",
+                  "(?:^|/|\\n)\\.\\.(?:/|\\n|$)",
+                  "site-packages/+paveo",
+                  "\\.pth(?:$|\\n)"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

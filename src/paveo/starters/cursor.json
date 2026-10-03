@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "policy_id": "starter-cursor-production-repo",
+  "agents": [
+    {
+      "id": "cursor",
+      "tools": {
+        "allow": [
+          {
+            "name": "Shell",
+            "constraints": {
+              "command": {
+                "not_matches": [
+                  "\\brm\\s+-[a-z]*(?:r[a-z]*f|f[a-z]*r)",
+                  "\\brm\\s[^\\n]{0,100}--recursive",
+                  "\\bgit\\s+push\\b[^\\n]{0,100}(?:--force|\\s-f\\b)",
+                  "\\bgit\\s+reset\\s+--hard",
+                  "\\bgit\\s+clean\\s+-[a-z]*f",
+                  "\\b(?:drop|truncate)\\s+(?:table|database|schema)",
+                  "\\bterraform\\s+destroy",
+                  "\\bkubectl\\s+delete",
+                  "\\bmkfs",
+                  "\\.pave",
+                  "\\.cursor(?:$|[^a-z0-9_])",
+                  "hooks\\.json",
+                  "\\bpaveo\\s+resume"
+                ]
+              }
+            }
+          },
+          {
+            "name": "Write",
+            "constraints": {
+              "file_path": {
+                "not_matches": [
+                  "\\.paveo",
+                  "\\.cursor(?:$|/)",
+                  "(?:^|/)\\.\\.(?:/|$)",
+                  "site-packages/+paveo",
+                  "\\.pth(?:$|\\n)"
+                ]
+              },
+              "content": {}
+            }
+          },
+          {
+            "name": "Delete",
+            "constraints": {
+              "file_path": {
+                "not_matches": [
+                  "\\.paveo",
+                  "\\.cursor(?:$|/)",
+                  "(?:^|/)\\.\\.(?:/|$)",
+                  "site-packages/+paveo",
+                  "\\.pth(?:$|\\n)"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

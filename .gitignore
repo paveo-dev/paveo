@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# Audit logs — payload-free by design, but they still carry agent identities,
+# principals and spend. Never in the repo (Rule 20).
+*.jsonl
+*.jsonl.anchor
+audit*.log
+
+# Local policy files may carry real agent ids and ceilings; ship examples only.
+paveo.local.json
+
+# OS
+.DS_Store

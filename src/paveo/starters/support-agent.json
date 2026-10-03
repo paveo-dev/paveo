@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "policy_id": "starter-support-agent",
+  "agents": [
+    {
+      "id": "support-agent",
+      "budget": {
+        "period": "day",
+        "limit_usd": "20.00"
+      },
+      "models": {
+        "allow": [
+          "claude-sonnet-5",
+          "claude-haiku-4-5"
+        ]
+      },
+      "tools": {
+        "allow": [
+          {
+            "name": "lookup_order",
+            "constraints": {
+              "order_id": {
+                "matches": "ORD-[0-9]{6,10}"
+              }
+            }
+          },
+          {
+            "name": "lookup_customer",
+            "constraints": {
+              "customer_id": {
+                "matches": "C-[0-9]{6,10}"
+              }
+            }
+          },
+          {
+            "name": "refund",
+            "constraints": {
+              "order_id": {
+                "matches": "ORD-[0-9]{6,10}"
+              },
+              "amount_usd": {
+                "max": "200.00",
+                "min": "0.01"
+              },
+              "currency": {
+                "in": [
+                  "USD",
+                  "EUR",
+                  "GBP"
+                ]
+              },
+              "reason": {}
+            },
+            "requires": {
+              "tool": "lookup_order",
+              "same": [
+                "order_id"
+              ]
+            },
+            "repeat": {
+              "seconds": 3600,
+              "same": [
+                "order_id"
+              ]
+            }
+          },
+          {
+            "name": "send_reply",
+            "constraints": {
+              "customer_id": {
+                "matches": "C-[0-9]{6,10}"
+              },
+              "body": {}
+            }
+          }
+        ],
+        "deny": [
+          "delete_account",
+          "change_email",
+          "change_payout_account",
+          "issue_credit"
+        ]
+      }
+    }
+  ]
+}

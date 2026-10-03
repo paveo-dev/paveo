@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "policy_id": "starter-claude-code-production-repo",
+  "agents": [
+    {
+      "id": "claude-code",
+      "tools": {
+        "allow": [
+          {
+            "name": "Bash",
+            "constraints": {
+              "command": {
+                "not_matches": [
+                  "\\brm\\s+-[a-z]*(?:r[a-z]*f|f[a-z]*r)",
+                  "\\brm\\s[^\\n]{0,100}--recursive",
+                  "\\bgit\\s+push\\b[^\\n]{0,100}(?:--force|\\s-f\\b)",
+                  "\\bgit\\s+reset\\s+--hard",
+                  "\\bgit\\s+clean\\s+-[a-z]*f",
+                  "\\b(?:drop|truncate)\\s+(?:table|database|schema)",
+                  "\\bterraform\\s+destroy",
+                  "\\bkubectl\\s+delete",
+                  "\\bmkfs",
+                  "\\.pave",
+                  "\\.claude(?:$|[^.a-z0-9_]|\\.$|\\.[^ac])",
+                  "settings(?:\\.local)?\\.json",
+                  "\\.mcp\\.json",
+                  "\\bpaveo\\s+resume"
+                ]
+              },
+              "description": {},
+              "timeout": {},
+              "run_in_background": {},
+              "dangerouslyDisableSandbox": {}
+            }
+          },
+          {
+            "name": "Write",
+            "constraints": {
+              "file_path": {
+                "not_matches": [
+                  "\\.paveo",
+                  "\\.claude(?:$|\\.json)",
+                  "\\.mcp\\.json",
+                  "\\.claude/+(?:$|[^p]|p[^l]|pl[^a]|pla[^n]|plan[^s]|plans[^/])",
+                  "(?:^|/)\\.\\.(?:/|$)",
+                  "site-packages/+paveo",
+                  "\\.pth(?:$|\\n)"
+                ]
+              },
+              "content": {}
+            }
+          },
+          {
+            "name": "Edit",
+            "constraints": {
+              "file_path": {
+                "not_matches": [
+                  "\\.paveo",
+                  "\\.claude(?:$|\\.json)",
+                  "\\.mcp\\.json",
+                  "\\.claude/+(?:$|[^p]|p[^l]|pl[^a]|pla[^n]|plan[^s]|plans[^/])",
+                  "(?:^|/)\\.\\.(?:/|$)",
+                  "site-packages/+paveo",
+                  "\\.pth(?:$|\\n)"
+                ]
+              },
+              "old_string": {},
+              "new_string": {},
+              "replace_all": {}
+            }
+          },
+          {
+            "name": "NotebookEdit",
+            "constraints": {
+              "notebook_path": {
+                "not_matches": [
+                  "\\.paveo",
+                  "\\.claude(?:$|\\.json)",
+                  "\\.mcp\\.json",
+                  "\\.claude/+(?:$|[^p]|p[^l]|pl[^a]|pla[^n]|plan[^s]|plans[^/])",
+                  "(?:^|/)\\.\\.(?:/|$)",
+                  "site-packages/+paveo",
+                  "\\.pth(?:$|\\n)"
+                ]
+              },
+              "new_source": {},
+              "cell_id": {},
+              "cell_type": {},
+              "edit_mode": {}
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
