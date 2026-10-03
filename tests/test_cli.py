@@ -574,7 +574,9 @@ def test_selftest_never_runs_a_link_named_paveo_to_something_else(
     code, out = run_selftest(tmp_path, settings, confirm=True)
 
     assert code == 1
-    assert "is a link to sh" in out
+    # The chain is followed to its end: on Debian and Ubuntu /bin/sh is dash.
+    shell = Path("/bin/sh").resolve().name
+    assert f"is a link to {shell}, not to paveo" in out
     assert not (project / "owned").exists()
 
 
