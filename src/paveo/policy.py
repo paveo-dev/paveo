@@ -37,7 +37,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Mapping, Sequence, Set
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from types import MappingProxyType
 
@@ -278,8 +278,11 @@ class AgentPolicy:
     shadow: bool
     # For each tool some rule `requires`, the argument names those rules compare.
     # Built once at load, so an admitted call's footprints are one lookup, and
-    # none at all for a policy that uses no `requires` (/code-review, D58).
-    compared_after: Mapping[str, tuple[tuple[str, ...], ...]] = MappingProxyType({})
+    # none at all for a policy that uses no `requires` (/code-review, D58). A
+    # factory, because Python 3.11 refuses an unhashable default.
+    compared_after: Mapping[str, tuple[tuple[str, ...], ...]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
     # Each tool a `rate` or `repeat` rule watches (D59).
     watched: frozenset[str] = frozenset()
     # The longest of those windows: calls older than this are forgotten.

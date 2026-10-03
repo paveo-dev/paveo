@@ -13,16 +13,21 @@ jobs:
   # The gate runs apart from the build. It installs the test tools, which are
   # not pinned by hash, and runs them; the build job never has them, so nothing
   # they could do reaches the files it packages (/security-review, D67).
+  # On the oldest and newest Python supported, as ci.yml does: the first 0.1.0
+  # tag passed a 3.13-only gate while `import paveo` failed on 3.11 (D78).
   check:
     if: github.repository == 'paveo-dev/paveo'
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.14"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python }}
       # The whole gate, and the price tables no older than 30 days (D43).
       - run: make dev
       - run: make release-check
