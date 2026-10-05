@@ -69,9 +69,10 @@ that never runs, and an agent you put in shadow mode. Check: `docs/SPEC_V1.md` Â
 The free plan applies, with a warning: every rule keeps enforcing, the first two
 agents keep working, and an agent past two is refused and told why. Nothing is
 ever let through because a key lapsed. A signed key that has been altered is
-refused outright rather than guessed at. A 30-day trial is a start date written on
-your machine, not a signed key, so whoever can edit that file can restart it; that
-changes which plan applies, never what a rule refuses. Check:
+refused outright rather than guessed at. A 30-day trial, which only 0.1.0 and
+0.1.1 could start, is a start date written on your machine, not a signed key, so
+whoever can edit that file can restart it; that changes which plan applies, never
+what a rule refuses. Check:
 `tests/test_licence.py` and `src/paveo/_licence.py`.
 
 **Can concurrent calls overspend a budget?**

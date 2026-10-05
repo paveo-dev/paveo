@@ -139,8 +139,9 @@ def test_the_refusal_tells_the_model_nothing_about_the_plan(log: Path) -> None:
         with pytest.raises(PolicyDenied) as refused:
             s.check_tool("lookup_order", {})
     assert "(plan_limit)" in refused.value.for_model
-    assert "paveo trial" not in refused.value.for_model
-    assert "paveo trial" in str(refused.value)
+    assert "licence key" not in refused.value.for_model
+    assert "licence key" in str(refused.value)
+    assert "paveo trial" not in str(refused.value)
 
 
 # --------------------------------------------------------------------------
@@ -286,12 +287,18 @@ def test_a_broken_key_beside_the_policy_refuses_every_call(home: Path) -> None:
 
 
 # --------------------------------------------------------------------------
-# 5. The trial (D63): 30 days of Team, started locally, no signature
+# 5. A trial written by 0.1.0 or 0.1.1 (D63): 30 days of Team, no signature.
+#    No command starts one any more (D85); one already written runs to its end.
 # --------------------------------------------------------------------------
 
 
+def old_trial(started: date) -> str:
+    """A trial as ``paveo trial`` wrote it in 0.1.0 and 0.1.1."""
+    return f"paveo-trial.{started.isoformat()}"
+
+
 def test_a_trial_grants_team_for_thirty_days(log: Path) -> None:
-    started = _licence.trial(TODAY - timedelta(days=29))
+    started = old_trial(TODAY - timedelta(days=29))
     with paveo(log, 10, started) as pf:
         assert outcome(pf, "agent-10") == "allow"
 
@@ -300,7 +307,7 @@ def test_a_trial_after_thirty_days_reverts_with_a_warning(
     log: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="paveo"):
-        pf = paveo(log, 4, _licence.trial(TODAY - timedelta(days=31)))
+        pf = paveo(log, 4, old_trial(TODAY - timedelta(days=31)))
     with pf:
         assert outcome(pf, "agent-4") == "plan_limit"
         assert outcome(pf, "agent-2") == "allow"
@@ -308,7 +315,7 @@ def test_a_trial_after_thirty_days_reverts_with_a_warning(
 
 
 @pytest.mark.parametrize("token", ["paveo-trial.2099-01-01", "paveo-trial.soon"])
-def test_a_trial_not_started_by_paveo_trial_is_refused(log: Path, token: str) -> None:
+def test_a_trial_paveo_trial_never_wrote_is_refused(log: Path, token: str) -> None:
     with pytest.raises(ConfigError):
         paveo(log, 1, token)
 
@@ -317,42 +324,26 @@ def test_a_trial_needs_no_paveo_team(
     log: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setitem(sys.modules, "cryptography.exceptions", None)
-    with paveo(log, 10, _licence.trial(TODAY)) as pf:
+    with paveo(log, 10, old_trial(TODAY)) as pf:
         assert outcome(pf, "agent-10") == "allow"
 
 
-def test_paveo_trial_starts_once_and_then_says_what_is_left(home: Path) -> None:
-    from paveo.cli import start_trial  # noqa: PLC0415
-
-    first, again = io.StringIO(), io.StringIO()
-    assert start_trial(home, today=TODAY, out=first) == 0
-    assert "Team trial started" in first.getvalue()
-    assert start_trial(home, today=TODAY + timedelta(days=5), out=again) == 0
-    assert "running until 2026-10-27" in again.getvalue()
-    assert (home / "licence.key").read_text("utf-8").strip() == "paveo-trial.2026-09-27"
-    assert oct((home / "licence.key").stat().st_mode & 0o777) == oct(0o600)
-    # The trial reaches the guard: the fourth agent now works.
+def test_a_trial_written_before_upgrading_still_reaches_the_guard(
+    home: Path,
+) -> None:
+    """Refusing the token would fail every call closed for someone who only
+    upgraded (locked decision #4 turned against them); it runs to its end."""
+    (home / "licence.key").write_text(old_trial(TODAY) + "\n", encoding="utf-8")
     assert through_guard(home) == (0, "")
 
 
-def test_paveo_trial_never_replaces_a_paid_key(home: Path) -> None:
-    from paveo.cli import start_trial  # noqa: PLC0415
+def test_paveo_trial_is_no_longer_a_command(home: Path) -> None:
+    from paveo.cli import main  # noqa: PLC0415
 
-    paid = key("business")
-    (home / "licence.key").write_text(paid, encoding="utf-8")
-    said = io.StringIO()
-    assert start_trial(home, today=TODAY, out=said) == 1
-    assert "already holds a licence key" in said.getvalue()
-    assert (home / "licence.key").read_text("utf-8") == paid
-
-
-def test_paveo_trial_needs_a_guarded_folder(tmp_path: Path) -> None:
-    from paveo.cli import start_trial  # noqa: PLC0415
-
-    empty = tmp_path / ".paveo"
-    empty.mkdir()
-    assert start_trial(empty, today=TODAY, out=io.StringIO()) == 1
-    assert not (empty / "licence.key").exists()
+    with pytest.raises(SystemExit) as ended:
+        main(["trial", "--dir", str(home)])
+    assert ended.value.code == 2
+    assert not (home / "licence.key").exists()
 
 
 # --------------------------------------------------------------------------
@@ -361,7 +352,7 @@ def test_paveo_trial_needs_a_guarded_folder(tmp_path: Path) -> None:
 
 
 def test_the_trial_is_over_on_its_thirtieth_day(log: Path) -> None:
-    with paveo(log, 4, _licence.trial(TODAY - timedelta(days=30))) as pf:
+    with paveo(log, 4, old_trial(TODAY - timedelta(days=30))) as pf:
         assert outcome(pf, "agent-4") == "plan_limit"
 
 
@@ -371,7 +362,7 @@ def test_a_long_running_process_reverts_when_its_key_ends(log: Path) -> None:
         document(4),
         audit_path=log,
         now=lambda: moment[0],
-        licence=_licence.trial(TODAY - timedelta(days=29)),
+        licence=old_trial(TODAY - timedelta(days=29)),
     ) as pf:
         assert outcome(pf, "agent-4") == "allow"
         moment[0] += timedelta(days=1)  # the trial ends overnight
@@ -443,51 +434,12 @@ def test_replay_judges_under_the_plan_the_guard_applies(home: Path) -> None:
     assert "plan.developer" in said.getvalue()
 
 
-def test_trial_and_init_keep_the_key_out_of_git_in_an_older_project(
-    home: Path,
-) -> None:
-    from paveo.cli import start_trial  # noqa: PLC0415
-
-    (home / ".gitignore").write_text("audit.jsonl\nstop\n", encoding="utf-8")
-    start_trial(home, today=TODAY, out=io.StringIO())
-    assert "licence.key" in (home / ".gitignore").read_text("utf-8").splitlines()
-
-
-@pytest.mark.parametrize("content", ["paveo-trial.garbage", "paveo-trial.2099-01-01"])
-def test_paveo_trial_explains_a_broken_trial_rather_than_crash(
-    home: Path, content: str
-) -> None:
-    from paveo.cli import start_trial  # noqa: PLC0415
-
-    (home / "licence.key").write_text(content, encoding="utf-8")
-    said = io.StringIO()
-    assert start_trial(home, today=TODAY, out=said) == 1
-    assert "Nothing changed" in said.getvalue()
-
-
-def test_paveo_trial_starts_over_an_empty_file_and_refuses_a_link(
-    home: Path, tmp_path: Path
-) -> None:
-    from paveo.cli import start_trial  # noqa: PLC0415
-
-    (home / "licence.key").write_text("", encoding="utf-8")
-    assert start_trial(home, today=TODAY, out=io.StringIO()) == 0
-    (home / "licence.key").unlink()
-    elsewhere = tmp_path / "elsewhere"
-    (home / "licence.key").symlink_to(elsewhere)
-    said = io.StringIO()
-    assert start_trial(home, today=TODAY, out=said) == 1
-    assert not elsewhere.exists()
-
-
 def test_what_each_plan_switches_on() -> None:
     """Audit evidence is Team and up, a trial included; a lapsed key drops it
     with the rest of the plan (D66)."""
     assert _licence.read_key(key("team"), today=TODAY).features == {"evidence"}
     assert _licence.read_key(key("business"), today=TODAY).features == {"evidence"}
-    assert _licence.read_key(_licence.trial(TODAY), today=TODAY).features == {
-        "evidence"
-    }
+    assert _licence.read_key(old_trial(TODAY), today=TODAY).features == {"evidence"}
     assert _licence.DEVELOPER.features == frozenset()
     lapsed = _licence.read_key(key("team", days=-1), today=TODAY)
     assert lapsed.features == frozenset()

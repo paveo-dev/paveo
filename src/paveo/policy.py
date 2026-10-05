@@ -321,7 +321,7 @@ class Policy:
                 f"the {self.plan} plan covers fewer agents than this policy "
                 f"declares, and {agent_id!r} is past them in the file's order. "
                 f"Remove agents, or add a licence key for a plan that covers "
-                f"them (paveo trial starts 30 days of Team)."
+                f"them."
             ),
         )
 

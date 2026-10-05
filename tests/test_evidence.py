@@ -30,7 +30,7 @@ from conftest import records_in
 from paveo import _evidence, audit
 from paveo._evidence import command, export
 from paveo._harnesses import CLAUDE_CODE
-from paveo._licence import LICENCE_FILE, trial
+from paveo._licence import LICENCE_FILE, TRIAL_PREFIX
 from paveo._policy_document import load_file
 from paveo.audit import AuditLog, anchor_path
 from paveo.cli import guard, main
@@ -42,6 +42,11 @@ POLICY = {
     "policy_id": "evidence",
     "agents": [{"id": "claude-code", "tools": {"allow": [{"name": "Read"}]}}],
 }
+
+
+def trial(started: date) -> str:
+    """Team, as a trial written by 0.1.0 or 0.1.1 grants it (D85)."""
+    return f"{TRIAL_PREFIX}{started.isoformat()}"
 
 
 @pytest.fixture
@@ -125,7 +130,8 @@ def test_the_developer_plan_is_refused_and_nothing_is_written(
 
     assert code == 1
     assert "Team plan" in said
-    assert "paveo trial" in said
+    assert "licence key" in said
+    assert "paveo trial" not in said
     assert list(tmp_path.iterdir()) == [home]
 
 
@@ -138,7 +144,6 @@ def test_a_trial_that_ended_says_so(home: Path, tmp_path: Path) -> None:
 
     assert code == 1
     assert "team trial licence ended on" in said
-    # A trial already had is not offered again (/code-review).
     assert "paveo trial" not in said
     assert not (tmp_path / "out").exists()
 

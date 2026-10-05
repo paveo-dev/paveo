@@ -41,8 +41,10 @@ PUBLIC_KEY = bytes.fromhex(
 )
 
 _PREFIX = "paveo1"
-# A trial is a start date, not a signed key: it is started on the customer's
-# machine with no server to sign it (prime directive 3, D61, D63).
+# A trial is a start date, not a signed key, written by `paveo trial` in 0.1.0
+# and 0.1.1 (D63). That command is gone (D85), but a trial it wrote still runs
+# to its end: refusing the token would fail every call closed for someone who
+# only upgraded.
 TRIAL_PREFIX = "paveo-trial."
 TRIAL_DAYS = 30
 _WARN_BEFORE = timedelta(days=14)
@@ -112,11 +114,6 @@ def plan_in(directory: Path, *, today: date) -> Plan:
     return read_key(text, today=today)
 
 
-def trial(started: date) -> str:
-    """The token ``paveo trial`` writes: 30 days of Team from ``started``."""
-    return f"{TRIAL_PREFIX}{started.isoformat()}"
-
-
 def read_key(text: str, *, today: date) -> Plan:
     """The plan ``text`` grants today, or ``ConfigError`` if it is not a key we
     signed or a trial. An expired key or trial is not an error: it grants
@@ -151,8 +148,8 @@ def read_key(text: str, *, today: date) -> Plan:
 
 def _read_trial(started_on: str, *, today: date) -> Plan:
     """A trial needs no signature and so no ``paveo[team]``. Rewriting its date
-    restarts it, which the licence forbids; one dated in the future was not
-    started by ``paveo trial`` and is refused."""
+    restarts it, which the licence forbids; one dated in the future was never
+    written by ``paveo trial`` and is refused."""
     try:
         started = date.fromisoformat(started_on)
     except ValueError as e:
@@ -160,7 +157,7 @@ def _read_trial(started_on: str, *, today: date) -> Plan:
     if started > today:
         raise ConfigError(
             "the trial in the licence key starts in the future.",
-            remedy="run `paveo trial` again, or remove the key to use the free plan.",
+            remedy="remove the key to use the free plan.",
         )
     # Thirty days means the start day and 29 more: over on the thirtieth day after.
     ends = started + timedelta(days=TRIAL_DAYS)

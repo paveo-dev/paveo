@@ -5,7 +5,6 @@
     paveo init {claude-code,codex,cursor}
     paveo guard {claude-code,codex,cursor} [--dir .paveo] [--agent NAME]
     paveo guard [AGENT] --selftest [--settings FILE ...]
-    paveo trial [--dir .paveo]
     paveo stop [--dir .paveo]
     paveo resume [--dir .paveo]
     paveo replay claude-code [PATH ...] [--dir .paveo] [--agent claude-code]
@@ -28,8 +27,8 @@ permission prompt, and a seatbelt must never widen what is permitted. Silence
 leaves the call to the agent's normal flow.
 
 Nothing here opens a socket: stdin, files and, for ``--selftest``, a child
-process. The standalone no-egress run drives the guard, ``stop``, ``resume``,
-``trial`` and ``evidence``.
+process. The standalone no-egress run drives the guard, ``stop``, ``resume`` and
+``evidence``.
 Setting the guard up, ``init`` and ``--selftest``, lives in ``_setup``; reading
 past sessions, ``replay`` and ``learn``, in ``_replay``; audit evidence, a paid
 feature, in ``_evidence``.
@@ -61,21 +60,14 @@ from ._harnesses import (
     for_policy,
     real_paths,
 )
-from ._licence import (
-    LICENCE_FILE,
-    TRIAL_PREFIX,
-    apply,
-    plan_in,
-    read_key,
-    trial,
-)
+from ._licence import apply, plan_in
 from ._memory import SessionMemory
 from ._policy_document import load_file
 from ._replay import from_history
 from ._setup import BLOCK as _BLOCK
 from ._setup import NOT_A_CALL as _NOT_A_CALL
 from ._setup import POLICY as _POLICY
-from ._setup import ask, init, keep_out_of_git, run_hook, selftest
+from ._setup import ask, init, run_hook, selftest
 from .audit import AuditLog, utc_now
 from .errors import ConfigError, PaveoError, PolicyDenied
 from .session import Identity
@@ -119,7 +111,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return 
             now=datetime.now(UTC),
             out=sys.stdout,
         )
-    if arguments.command in {"trial", "stop", "resume"}:
+    if arguments.command in {"stop", "resume"}:
         return _manage(arguments.command, directory)
     if arguments.command == "mcp":
         return _guard_mcp(directory, arguments.agent, arguments.server)
@@ -170,8 +162,6 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return 
 
 def _manage(command: str, directory: Path) -> int:
     """The commands a person runs on ``--dir`` itself."""
-    if command == "trial":
-        return start_trial(directory, today=datetime.now(UTC).date(), out=sys.stdout)
     if command == "stop":
         return stop(directory, out=sys.stdout)
     return resume(directory, out=sys.stdout)
@@ -485,65 +475,6 @@ def _stop_file_present(path: Path) -> bool:
     return True
 
 
-def start_trial(directory: Path, *, today: date, out: TextIO) -> int:
-    """Start 30 days of Team in ``--dir``: a trial token in its licence file.
-
-    Never replaces a key someone paid for, and never restarts a trial already
-    running: run again, it says how long is left (D65). Whatever is wrong with
-    the file is said, not raised: this is a person at a terminal (/code-review).
-    """
-    if not _guarded(directory, out):
-        return 1
-    location = directory / LICENCE_FILE
-    try:
-        current = location.read_text(encoding="utf-8").strip()
-    except FileNotFoundError:
-        current = None
-    except (OSError, UnicodeDecodeError) as e:
-        out.write(f"paveo: {location} could not be read ({e}); nothing changed.\n")
-        return 1
-    if current and not current.startswith(TRIAL_PREFIX):
-        out.write(
-            f"paveo: {location} already holds a licence key; the trial would "
-            f"replace it, so nothing changed.\n"
-        )
-        return 1
-    if current:
-        return _trial_state(current, today=today, out=out)
-    key = trial(today)
-    try:
-        # A key is this machine's, never the repository's (D62), and a project
-        # set up before this existed has no such line yet.
-        keep_out_of_git(directory / ".gitignore", LICENCE_FILE)
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
-        descriptor = os.open(location, flags, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as file:
-            file.write(key + "\n")
-    except OSError as e:
-        out.write(f"paveo: {location} could not be written ({e}); nothing changed.\n")
-        return 1
-    plan = read_key(key, today=today)
-    out.write(
-        f"paveo: Team trial started: up to {plan.agents} agents per policy "
-        f"until {plan.expires}. "
-        f"Nothing is charged, and when it ends the free plan applies; no agent "
-        f"stops.\n"
-    )
-    return 0
-
-
-def _trial_state(current: str, *, today: date, out: TextIO) -> int:
-    """Say where a trial already started stands, rather than restart it."""
-    try:
-        plan = read_key(current, today=today)
-    except ConfigError as e:
-        out.write(f"paveo: {e} Nothing changed.\n")
-        return 1
-    state = "ended on" if plan.lapsed is not None else "is running until"
-    out.write(f"paveo: the Team trial {state} {plan.expires}.\n")
-    return 0
-
-
 def stop(directory: Path, *, out: TextIO) -> int:
     """Refuse every check under ``directory`` until ``resume``. Idempotent.
 
@@ -602,7 +533,6 @@ def _parser() -> argparse.ArgumentParser:
     for name, summary in (
         ("stop", "refuse every call"),
         ("resume", "lift a stop"),
-        ("trial", "start 30 days of the Team plan here"),
     ):
         command = commands.add_parser(name, help=summary)
         command.add_argument("--dir", default=".paveo")

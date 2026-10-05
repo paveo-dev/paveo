@@ -194,13 +194,12 @@ def command(  # noqa: PLR0913 - keyword-only; every path and the clock are injec
 
 
 def _upgrade(lapsed: str | None, expires: date | None, directory: Path) -> str:
-    """What to do, for the plan in force: a trial only if none was had."""
+    """What to do, for the plan in force."""
     key = f"put a licence key for Team or up in {directory}/licence.key"
     if lapsed is None:
         return (
-            f"paveo: audit evidence is part of the Team plan and up. "
-            f"`paveo trial --dir {directory}` starts 30 days of Team with no "
-            f"card, or {key}.\n"
+            f"paveo: audit evidence is part of the Team plan and up. To export, "
+            f"{key}.\n"
         )
     return (
         f"paveo: the {lapsed} licence ended on {expires}, and audit evidence is "

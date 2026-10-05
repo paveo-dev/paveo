@@ -252,7 +252,7 @@ hash-chained, on your disk. Never a prompt, a completion or a tool argument.
 `check_llm`, `wrap_anthropic`, `remaining`, `PolicyDenied.for_model`, the policy
 file with shadow mode, `not_matches`, `requires`, `rate` and `repeat`,
 `verify_chain`, the `paveo` command (`init`, the guard for Claude Code, Codex and
-Cursor, `stop`, `resume`, `replay`, `learn`, `trial`, `evidence`), starter
+Cursor, `stop`, `resume`, `replay`, `learn`, `evidence`, `mcp`), starter
 policies, and readers for Anthropic, OpenAI Chat Completions and Gemini
 `generate_content` requests. **Not built yet:** `async_session`, and a budget
 shared across processes.
@@ -425,12 +425,9 @@ guarding their own machine stays on Developer, free. The company's key adds audi
 evidence from each developer's log, email support, and an hour with us writing the
 policy you roll out to everyone.
 
-**Try Team for 30 days** with `paveo trial` in a guarded project: it writes a trial
-into `.paveo/licence.key`, needs no card, no account and no `paveo[team]`, and
-never replaces a key you paid for. Run it again and it says how long is left.
-When it ends the free plan applies: the first two agents keep working under
-every rule, and any past two are refused until a key is added. For the library, pass the
-same file's contents as `licence=`.
+**Try it on the free plan**: Developer needs no key, no card and no account.
+Paid plans and the design-partner offer are on the
+[pricing page](https://paveo.vercel.app/#pricing).
 
 **Audit evidence (Team and up):** `paveo evidence --since 2026-09-01 --until
 2026-09-30` writes a folder for an auditor: `report.html` (who was allowed and

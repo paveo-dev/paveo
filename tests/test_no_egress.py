@@ -250,7 +250,7 @@ def _exercise_library(workdir: Path) -> None:
 
 def _exercise_command(workdir: Path) -> None:
     """The `paveo` command (D49): the Claude Code guard allowing, refusing and
-    stopped, the panic button, the trial and audit evidence. Driven in-process
+    stopped, the panic button, and audit evidence. Driven in-process
     so the guard sees it; `--selftest` starts a child process, which this guard
     could not see into, and is left to its own tests."""
     import io  # noqa: PLC0415
@@ -354,8 +354,10 @@ def _exercise_command(workdir: Path) -> None:
     assert main(["resume", "--dir", str(home)]) == 0
     assert paveo.verify_chain(home / "audit.jsonl").ok
 
-    # Audit evidence (D66), a paid feature, under a trial started here.
-    assert main(["trial", "--dir", str(home)]) == 0
+    # Audit evidence (D66), a paid feature, under a trial 0.1.1 wrote (D85).
+    (home / "licence.key").write_text(
+        f"paveo-trial.{datetime.now(UTC).date()}\n", encoding="utf-8"
+    )
     evidence = workdir / "evidence"
     assert main(["evidence", "--dir", str(home), "--out", str(evidence)]) == 0
     assert (evidence / "report.html").is_file()
