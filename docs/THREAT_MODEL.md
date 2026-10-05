@@ -155,10 +155,30 @@ plugins, agents and skills with hooks in their frontmatter, commands), and an
 MCP server added to `.mcp.json` runs tools the hook never sees. Paths are matched
 as macOS and Linux write them; the guard does not run on Windows. A narrower
 Bash rule was tried and dropped because it opened paths the blanket one closed
-(D54). **Best effort only:** a command assembled at run time, a script, a
-symlink, a variable, or a glob or quote inside the name (`~/.clau*`,
-`.cl''aude`, `${X%.ai}` after `X=~/.claude.ai`) gets past a pattern. A guard
-rail, not a sandbox.
+(D54). A file tool's path is judged twice (D79): as written, and as the file
+it really reaches once symbolic links, `..` and the agent's working folder are
+resolved.
+So a link in the project named `notes.txt` that points at
+`~/.claude/settings.json` is refused, and so is a relative path sent with no
+working folder, which cannot be resolved, or one over 4096 characters. The full
+path is judged even for a path written relative, so a rule that names permitted
+folders by relative name must accept the full form too, and a project kept
+under a guarded folder name, such as inside `~/.codex`, has its edits refused. Deleting a link to a guarded file is
+refused too, though it would leave the file alone: refusing more is the safe
+side. A hard link has no other path to resolve to, so one made by a shell
+command is judged by its own name. **Best effort only:** a command assembled at
+run time, a script, a symlink or hard link named in a shell command, a variable, or a glob or quote inside the name
+(`~/.clau*`, `.cl''aude`, `${X%.ai}` after `X=~/.claude.ai`) gets past a
+pattern. A guard rail, not a sandbox.
+→ **A link made after the guard said yes** (D79). The guard resolves a path
+when it judges the call, and the agent's tool opens the file afterwards. A link
+put in place between the two, by another process or by a command of the agent's
+own still running, is followed by the tool. This is a time-of-check to
+time-of-use race (TOCTOU, CWE-367), and no check made before the open can close
+it: only the code that opens the file can, by following no link as it walks the
+path (on Linux, `openat2` with `RESOLVE_BENEATH`). `tests/test_real_paths.py`
+states the race as a test the guard does not pass, beside an opener that does,
+so an executor can run the same fixture with its own.
 → **The agent wiping its own memory** (D59). `requires`, `rate` and `repeat`
 remember through files in `.paveo/memory/`. Deleting one resets that session's
 counts, and a new session id starts from none. The starters' `.pave` rules cover
@@ -242,6 +262,39 @@ could run as a formula is prefixed with `'`: one starting with a formula
 character, or holding `;` (a cell break where it is the list separator), `=`,
 `+`, `@`, a tab or a return anywhere. The report carries no script. The
 export reads the log, never a payload (there is none), and opens no socket.
+
+
+**T12 · A tool call through the MCP guard that is judged as one thing and run as
+another** (D80). `paveo mcp` sits between an MCP client and a server, and the
+client's messages come from a model that may be under injection.
+→ **Every message is forwarded as Paveo re-serialized it**, never as the
+client's bytes: one line of ASCII, every control character escaped. So a gap
+between Paveo's JSON parser or line framing and the server's cannot turn a
+judged message into another, or split one into several. /security-review proved
+the gap was real: the MCP Python SDK ends a line at a bare `\r`, which Python's
+JSON parser reads as whitespace inside one message, so a notification forwarded
+as sent could carry a `tools/call` nobody judged. The re-review found a second
+gap of the same kind: Go's JSON decoder, under mcp-go servers, matches field names
+ignoring letter case (Unicode lookalikes such as `ſ` included), so `"Method"` or
+`"paramſ"` is the real field to Go and nothing to Paveo. A message or its params
+holding a key that folds to an envelope key (`jsonrpc`, `id`, `method`,
+`params`, `name`, `arguments`) without being spelled exactly so, or two keys that
+fold alike, is dropped. In a tool's arguments, two names that fold alike
+(`branch` and `BRANCH`) refuse the call, since a typed Go decoder would read one
+where Paveo judged the other; a lone `Name` is an ordinary argument. **Limit:**
+on a tool with no `constraints`, a single argument spelled in another case is
+judged as a different name, so a `repeat` or `requires` that compares `cmd`
+does not see `CMD`, which a case-insensitive server may treat as `cmd`. Give
+such a tool `constraints`: an argument name it does not list is then refused. A message naming the same key twice is dropped
+(parsers disagree on which one wins), and so is one that is not JSON or UTF-8,
+holds `NaN`, or is over 64 MiB; each leaves a note on stderr that never repeats
+it. A batch holding a tool call is refused whole. A decision that fails refuses.
+**Not covered:** only `tools/call` is judged, so resources, prompts and sampling
+pass through; stdio only, never HTTP; a path in a tool's arguments is
+judged as written, without the symbolic-link resolution the coding-agent hooks
+apply (T10, D79); the server is the user's program and what
+it does with an allowed call is its own; and a client configured to start the
+server without `paveo mcp` is not guarded, which nothing in Paveo can see.
 
 ---
 

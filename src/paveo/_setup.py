@@ -28,7 +28,7 @@ from importlib import resources
 from pathlib import Path
 from typing import TextIO
 
-from ._harnesses import CLAUDE_CODE, CODEX, CURSOR, Harness, for_policy
+from ._harnesses import CLAUDE_CODE, CODEX, CURSOR, Harness, for_policy, real_paths
 from ._policy_document import load_file
 from .errors import ConfigError
 from .policy import Recall
@@ -427,12 +427,20 @@ def _policy_weakness(
             )
         for tool, arguments, what in harness.probes:
             judged = for_policy(harness, tool, arguments)
-            # As the first call of a session sees it: remembering nothing, not
-            # unable to remember, which would refuse for the wrong reason (D59).
-            # Nor does `requires_unmet` count: one earlier call lifts it, so it
-            # does not refuse the command (/security-review, D59).
-            denial = loaded.evaluate_tool(agent, tool, judged, recall=_FRESH)
-            if denial is None or denial.reason == "requires_unmet":
+            # An agent mostly writes a path in full, as the guard's reading of
+            # the file it really reaches does (D79), so the edit is asked about
+            # both ways and must be refused both ways.
+            real = real_paths(
+                harness, tool, judged, os.path.abspath(policy.parent.parent)
+            )
+            for reading in (judged,) if real is None else (judged, real):
+                # As the first call of a session sees it: remembering nothing,
+                # not unable to remember, which would refuse for the wrong reason
+                # (D59). Nor does `requires_unmet` count: one earlier call lifts
+                # it, so it does not refuse the command (/security-review, D59).
+                denial = loaded.evaluate_tool(agent, tool, reading, recall=_FRESH)
+                if denial is not None and denial.reason != "requires_unmet":
+                    continue
                 return (
                     f"does not refuse {what} for {agent!r}. If that is deliberate, "
                     f"the seatbelt is off by your choice; to start from the starter "

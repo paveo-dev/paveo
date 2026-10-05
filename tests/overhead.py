@@ -34,6 +34,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import paveo
+from paveo._mcp import Gate, judge_line
 
 # Microseconds. About four times the median on an Apple M4, and over twice the
 # slowest run measured, x86 under emulation (D73): room for a shared CI runner,
@@ -43,6 +44,7 @@ BUDGET_US = {
     "check_tool": 250.0,
     "check_llm + record": 600.0,
     "hook, less the interpreter": 200_000.0,
+    "MCP tool call, judged": 250.0,
 }
 
 _LIBRARY_RUNS, _HOOK_RUNS, _WARMUP = 2000, 30, 5
@@ -118,7 +120,30 @@ def _library(directory: Path) -> dict[str, list[float]]:
                 lambda: s.check_llm(_REQUEST, shape="anthropic").record(_USAGE),
                 _LIBRARY_RUNS,
             ),
+            "MCP tool call, judged": _mcp(directory),
         }
+
+
+def _mcp(directory: Path) -> list[float]:
+    """One tools/call line parsed, judged and re-serialized, as `paveo mcp` does."""
+    home = directory / "mcp"
+    home.mkdir()
+    (home / "policy.json").write_text(json.dumps(_POLICY), encoding="utf-8")
+    line = (
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "lookup_order", "arguments": {"order_id": "A-1"}},
+            }
+        ).encode()
+        + b"\n"
+    )
+    with Gate(
+        home, agent="bot", principal="overhead", salt=b"s", stopped=lambda: False
+    ) as decide:
+        return _timed(lambda: judge_line(line, decide), _LIBRARY_RUNS)
 
 
 def _run(argv: list[str], stdin: bytes) -> float:

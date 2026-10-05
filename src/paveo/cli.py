@@ -42,6 +42,7 @@ import json
 import os
 import shlex
 import signal
+import subprocess
 import sys
 from collections.abc import Callable, Sequence
 from contextlib import ExitStack
@@ -50,8 +51,16 @@ from functools import partial
 from pathlib import Path
 from typing import BinaryIO, TextIO
 
-from . import _evidence, enforce
-from ._harnesses import CLAUDE_CODE, CODEX, CURSOR, HARNESSES, Harness, for_policy
+from . import _evidence, _mcp, enforce
+from ._harnesses import (
+    CLAUDE_CODE,
+    CODEX,
+    CURSOR,
+    HARNESSES,
+    Harness,
+    for_policy,
+    real_paths,
+)
 from ._licence import (
     LICENCE_FILE,
     TRIAL_PREFIX,
@@ -76,12 +85,12 @@ _LOG, _STOP = "audit.jsonl", "stop"
 # (about 60 ms, most of it starting Python and importing; tests/overhead.py).
 _DEADLINE_S = 4.0
 # A Write can carry a whole file. Over this, the call is refused unread.
-_MAX_CALL_BYTES = 64 << 20
+_MAX_CALL_BYTES = _mcp.MAX_MESSAGE_BYTES
 _MAX_PRINCIPAL = 128
 # The file headers of Codex's patch format (codex-rs/apply-patch).
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return per command
     arguments = _parser().parse_args(argv)
     if arguments.command == "init":
         project = Path.cwd()
@@ -112,6 +121,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if arguments.command in {"trial", "stop", "resume"}:
         return _manage(arguments.command, directory)
+    if arguments.command == "mcp":
+        return _guard_mcp(directory, arguments.agent, arguments.server)
     if arguments.command == "evidence":
         now = datetime.now(UTC)
         return _evidence.command(
@@ -240,7 +251,7 @@ def guard(  # noqa: PLR0913 - keyword-only; the streams and clock are injected (
             load_file(directory / _POLICY), plan_in(directory, today=today), today=today
         )
         with AuditLog(directory / _LOG, now=now) as audit:
-            tool, arguments, principal = _read_call(harness, stdin)
+            tool, arguments, real, principal = _read_call(harness, stdin)
             decide = partial(
                 enforce.check_tool,
                 policy=policy,
@@ -250,7 +261,18 @@ def guard(  # noqa: PLR0913 - keyword-only; the streams and clock are injected (
                 arguments=arguments,
                 stopped=stopped(),
             )
-            if not policy.needs_memory(agent, tool) or principal is None:
+            denial = None if real is None else policy.evaluate_tool(agent, tool, real)
+            if (
+                real is not None
+                and denial is not None
+                and denial.reason == "constraint_violated"
+            ):
+                # Refused for the file the path really reaches (D79). Only the
+                # path differs from the written call, so only a constraint can
+                # tell the two apart. Decided on that reading alone, without
+                # memory, so the call is recorded once and counted nowhere.
+                decide(arguments=real, recall=None)
+            elif not policy.needs_memory(agent, tool) or principal is None:
                 # Nothing to read or leave, or no session to keep it for: a rule
                 # that needs memory then refuses as memory_unavailable (D59).
                 decide(recall=None)
@@ -339,8 +361,10 @@ def _refuse(harness: Harness, message: str, stdout: TextIO, stderr: TextIO) -> i
 
 def _read_call(
     harness: Harness, stdin: BinaryIO
-) -> tuple[str, dict[str, object], str | None]:
-    """The tool name, its input and the session id, or ``ConfigError``.
+) -> tuple[str, dict[str, object], dict[str, object] | None, str | None]:
+    """The tool name, its input, the input again with each file path resolved
+    (``real_paths``, ``None`` if that changes nothing) and the session id, or
+    ``ConfigError``.
 
     Claude Code and Codex send one shape. Codex's ``apply_patch`` also gets
     ``paths``, the files its patch names, so the policy judges the paths and not
@@ -379,12 +403,76 @@ def _read_call(
             f"the input {_NOT_A_CALL}: it has no tool and no input.", remedy=remedy
         )
     arguments = for_policy(harness, tool, arguments)
+    real = real_paths(harness, tool, arguments, call.get("cwd"))
     # An opaque id, recorded as the principal so one session's calls can be read
     # together. The agent chose it, not the model; bounded all the same.
     principal = (
         session if isinstance(session, str) and len(session) <= _MAX_PRINCIPAL else None
     )
-    return tool, arguments, principal or None
+    return tool, arguments, real, principal or None
+
+
+def _guard_mcp(directory: Path, agent: str, server: Sequence[str]) -> int:
+    """Start the user's MCP server behind the guard and relay until it exits.
+
+    Nothing is started unless the policy loads: an MCP client shows a server
+    that would not start, and nothing runs (locked decision #4). The server is
+    run without a shell, exactly as written after ``--``.
+    """
+    command = list(server[1:] if server[:1] == ["--"] else server)
+    if not command:
+        sys.stderr.write(
+            "paveo: name the server after --, e.g. "
+            "paveo mcp --agent files -- npx -y <server>\n"
+        )
+        return 1
+    try:
+        gate = _mcp.Gate(
+            directory,
+            agent=agent,
+            principal=f"mcp-{os.urandom(6).hex()}",
+            salt=os.urandom(16),
+            stopped=lambda: _stop_file_present(directory / _STOP),
+        )
+    except PaveoError as e:
+        sys.stderr.write(f"paveo: the MCP guard did not start: {e}\n")
+        return 1
+    with gate:
+        if not gate.declares():
+            sys.stderr.write(
+                f"paveo: the policy declares no agent {agent!r}, so every tool "
+                f"call will be refused.\n"
+            )
+        try:
+            process = subprocess.Popen(  # noqa: S603 - the user's own server, no shell
+                command, stdin=subprocess.PIPE, stdout=subprocess.PIPE
+            )
+        except OSError as e:
+            sys.stderr.write(
+                f"paveo: the MCP server could not be started ({type(e).__name__}).\n"
+            )
+            return 1
+        # A client ends a server with SIGTERM once its stdin is closed (MCP
+        # stdio); the server is our child, so it is stopped with us, never left.
+        signal.signal(signal.SIGTERM, _exit_on_signal)
+        try:
+            return _mcp.relay(
+                process,
+                gate,
+                client_in=sys.stdin.buffer,
+                client_out=sys.stdout.buffer,
+                err=sys.stderr,
+            )
+        finally:
+            # A second SIGTERM while stopping would abandon the server half-way.
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            # Asked to stop: the server is stopped at once, not given time to
+            # notice an end of input it may never get (/code-review, D80).
+            _mcp.stop_server(process, patient=False)
+
+
+def _exit_on_signal(signum: int, _frame: object) -> None:
+    raise SystemExit(128 + signum)
 
 
 def _stop_file_present(path: Path) -> bool:
@@ -529,6 +617,12 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument(
             "--agent", default="claude-code", help="agent id in policy"
         )
+    mcp = commands.add_parser(
+        "mcp", help="guard an MCP server: paveo mcp --agent NAME -- <server command>"
+    )
+    mcp.add_argument("--agent", required=True, help="agent id in policy")
+    mcp.add_argument("--dir", default=".paveo", help="policy, log and stop file")
+    mcp.add_argument("server", nargs=argparse.REMAINDER, help="after --")
     evidence = commands.add_parser(
         "evidence", help="export a period of the audit log for an auditor"
     )

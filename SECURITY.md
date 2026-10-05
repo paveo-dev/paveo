@@ -50,7 +50,15 @@ Overclaiming is itself a security problem, so:
   timeout: leave it at the default, or well above the guard's 4-second deadline. Cursor's hooks are written with `failClosed`, which Cursor
   documents as refusing the call on a crash or timeout. Its
   patterns are a guard rail against common destructive commands, not a sandbox:
-  a determined or disguised command gets past them. See THREAT_MODEL T10.
+  a determined or disguised command gets past them. A file path is judged as
+  written and as the file it reaches through symbolic links when the call is
+  judged; a hard link is judged by its own name, and a link swapped in after
+  that, before the agent opens the file, is followed. See THREAT_MODEL T10.
+- **The MCP guard (`paveo mcp`) judges tool calls only, over stdio.** Resources,
+  prompts and sampling pass through, a path in a tool's arguments is judged as
+  written without following symbolic links, and a client set up to start the server
+  without `paveo mcp` is not guarded. Every message reaches the server as Paveo
+  re-serialized it, so no line framing can hide a call inside another. See THREAT_MODEL T12.
 - **An agent in shadow mode is guarded by its budget and nothing else.** Its
   rule refusals are recorded as `would_deny` and allowed through, with a
   warning on every call. The mode is written in the policy and is part of the

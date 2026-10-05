@@ -31,6 +31,11 @@ sums, and names the policy or the price table already holds. A tool or model
 name neither holds is counted, not printed (D26). ``learn`` writes tool and
 argument names only, never a value, and only names shaped like identifiers.
 
+**A file path is judged as written only.** The guard also judges the file a path
+really reaches (D79), but that is a fact about the disk at the moment of the
+call, and the disk replay reads is the disk of today: a link made or removed
+since would change the verdict on a call that has already happened.
+
 Opens no socket: it reads files and writes one.
 """
 

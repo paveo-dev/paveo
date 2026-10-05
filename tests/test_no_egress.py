@@ -318,6 +318,7 @@ def _exercise_command(workdir: Path) -> None:
                 {
                     "tool_name": "apply_patch",
                     "tool_input": {"command": "*** Add File: a"},
+                    "cwd": str(workdir),
                 },
             ],
         ),
@@ -329,6 +330,7 @@ def _exercise_command(workdir: Path) -> None:
                     "hook_event_name": "preToolUse",
                     "tool_name": "Write",
                     "tool_input": {"file_path": "a", "content": ""},
+                    "cwd": str(workdir),
                 },
             ],
         ),
@@ -402,6 +404,30 @@ def _exercise_command(workdir: Path) -> None:
         out=io.StringIO(),
     )
     assert code == 0
+
+    # The MCP guard (B6, D80) judges in this process; the server it starts is a
+    # child, which is the user's program and outside this test by design.
+    from paveo._mcp import Gate, judge_line  # noqa: PLC0415
+
+    mcp_home = workdir / "mcp"
+    mcp_home.mkdir()
+    (mcp_home / "policy.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "policy_id": "egress-mcp",
+                "agents": [{"id": "files", "tools": {"allow": [{"name": "read"}]}}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with Gate(
+        mcp_home, agent="files", principal="p", salt=b"s", stopped=lambda: False
+    ) as decide:
+        for name in ("read", "write"):
+            message = {"jsonrpc": "2.0", "id": 1, "method": "tools/call"}
+            line = json.dumps({**message, "params": {"name": name}}).encode() + b"\n"
+            judge_line(line, decide)
 
 
 def check_no_egress() -> list[str]:

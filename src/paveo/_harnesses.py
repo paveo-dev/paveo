@@ -15,16 +15,25 @@ from the agent's own documentation (and Codex's source) on 2026-09-26, D57:
   the call through **unless the hook sets ``failClosed``**, which ``init`` does.
 
 This module is what ``init`` writes, what ``--selftest`` checks, the calls
-``init`` asks the policy about before it says the seatbelt is on, and the one
-change the guard makes to a call before the policy sees it (``for_policy``).
+``init`` asks the policy about before it says the seatbelt is on, the one change
+the guard makes to a call before the policy sees it (``for_policy``), and the
+second reading of a call it also judges, by the files it really reaches
+(``real_paths``).
 """
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 
 from .errors import ConfigError
+
+# Linux's PATH_MAX, in bytes, so a path this many characters long is already past
+# it. Resolving a longer one costs time that grows with the square of its length
+# on Python 3.11 (/code-review, D79).
+_LONGEST_PATH = 4096
+_UNRESOLVED = "the file it reaches cannot be told, so it is refused."
 
 # The file headers of Codex's patch format (codex-rs/apply-patch).
 _PATCH_HEADER = re.compile(r"\*\*\* (?:Add File|Update File|Delete File|Move to): (.*)")
@@ -54,6 +63,8 @@ class Harness:
     flat: bool
     # What init asks the policy: each must be refused before it says "on".
     probes: tuple[tuple[str, dict[str, object], str], ...]
+    # Each file tool and the argument naming its file, as the policy sees it.
+    paths: tuple[tuple[str, str], ...]
     # Said once init has checked everything it can: what is left, if anything.
     last_step: str
 
@@ -80,6 +91,11 @@ CLAUDE_CODE = Harness(
         ("Bash", {"command": _RM}, "`rm -rf`"),
         ("Write", {"file_path": _OWN_POLICY, "content": "{}"}, "an edit to it"),
     ),
+    paths=(
+        ("Write", "file_path"),
+        ("Edit", "file_path"),
+        ("NotebookEdit", "notebook_path"),
+    ),
     last_step="Start Claude Code in this folder: `rm -rf` and edits to the guard "
     "are now refused.",
 )
@@ -102,6 +118,7 @@ CODEX = Harness(
             "an edit to it",
         ),
     ),
+    paths=(("apply_patch", "paths"),),
     last_step="One step is left, and only you can take it: Codex runs no hook "
     "until you trust it. Start Codex in this folder, trust the folder if it "
     "asks, type /hooks and trust the paveo hook. Then check it:\n"
@@ -126,6 +143,7 @@ CURSOR = Harness(
         ("Shell", {"command": _RM}, "`rm -rf`"),
         ("Write", {"file_path": _OWN_POLICY, "content": "{}"}, "an edit to it"),
     ),
+    paths=(("Write", "file_path"), ("Delete", "file_path")),
     last_step="Open this folder in Cursor and trust the workspace if it asks: "
     "Cursor runs a project's hooks only in a trusted workspace. `rm -rf` is then "
     "refused, and so are Write and Delete on the guard's files; a file tool "
@@ -167,3 +185,59 @@ def _patch_paths(patch: str) -> str:
         for line in patch.split("\n")
         if (header := _PATCH_HEADER.match(line.strip())) is not None
     )
+
+
+def real_paths(
+    harness: Harness, tool: str, arguments: dict[str, object], cwd: object
+) -> dict[str, object] | None:
+    """``arguments`` with the file path replaced by the file it really reaches,
+    or ``None`` when that changes nothing (D79).
+
+    A rule matches the path as written, and a link named ``notes.txt`` can reach
+    ``~/.claude/settings.json``. ``realpath`` follows every symbolic link on the
+    path and drops ``..``. It is not strict, so a file not made yet still has its
+    folders resolved, which is where a linked folder hides. A relative path is
+    read from the agent's working folder, ``cwd``; with none to read it from it
+    cannot be resolved, so it cannot be judged, and ``ConfigError`` refuses it
+    (locked decision #4). Codex's ``paths`` hold one path a line, each resolved.
+    """
+    argument = dict(harness.paths).get(tool)
+    written = arguments.get(argument) if argument is not None else None
+    if argument is None or not isinstance(written, str):
+        return None
+    lines = written.split("\n") if harness is CODEX else [written]
+    real = "\n".join(_real_path(line, cwd) if line else line for line in lines)
+    return None if real == written else {**arguments, argument: real}
+
+
+def _real_path(path: str, cwd: object) -> str:
+    """Always in full. Relative to the working folder, a path would lose the
+    folders above it, and Codex started inside ``~/.codex`` would edit its own
+    ``config.toml`` under a name no rule can see (/code-review, D79). The price:
+    a rule naming relative paths, such as a ``matches`` listing the folders an
+    agent may edit, refuses a relative path until it also accepts the full one.
+    No error repeats the path: it is the call's payload (§8)."""
+    if os.path.isabs(path):
+        joined = path
+    elif isinstance(cwd, str) and os.path.isabs(cwd):
+        joined = os.path.join(cwd, path)
+    else:
+        raise ConfigError(
+            "a file path in the call is relative, and the agent sent no "
+            "absolute working folder to read it from.",
+            remedy=_UNRESOLVED,
+        )
+    if len(joined) > _LONGEST_PATH:
+        raise ConfigError(
+            f"a file path in the call, with its working folder, is over "
+            f"{_LONGEST_PATH} characters; no ordinary edit needs one that long.",
+            remedy=_UNRESOLVED,
+        )
+    try:
+        return os.path.realpath(joined)
+    except (OSError, ValueError) as e:  # ValueError: a NUL in the path
+        raise ConfigError(
+            "a file path in the call, or the working folder it is read from, "
+            "could not be resolved.",
+            remedy=_UNRESOLVED,
+        ) from e

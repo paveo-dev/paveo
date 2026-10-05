@@ -147,7 +147,24 @@ paveo guard {claude-code,codex,cursor} [--dir .paveo] [--agent NAME]   # the hoo
 paveo guard [AGENT] --selftest [--settings FILE ...]   # AGENT defaults to claude-code
 paveo stop   [--dir .paveo]
 paveo resume [--dir .paveo]
+paveo mcp --agent NAME [--dir .paveo] -- SERVER [ARGS ...]   # the MCP guard (B6, D80)
 ```
+
+**`paveo mcp`** starts the MCP server named after `--`, without a shell, and
+relays stdio between it and the client that started `paveo mcp`. Every
+`tools/call` is judged under `--agent` before the server sees it: allowed, it is
+forwarded as Paveo re-serialized it; refused, the server sees nothing and the
+client gets a result with `isError: true` and `PolicyDenied.for_model` as its
+text. Everything else passes unjudged. **Every message is forwarded as Paveo
+re-serialized it**, one line of ASCII with every control character escaped, so
+no reader's line framing can split it (D80). A line that cannot be read safely
+(not JSON or UTF-8, over 64 MiB, a key twice) is dropped with a note on stderr;
+a batch holding a tool call is answered with JSON-RPC errors. The run keeps one
+session's memory in the process, reads `stop` for every call, and re-applies the
+plan when the date changes. If the policy does not load, the server is not
+started and it exits 1. Its exit code is the server's. On `SIGTERM` it stops
+the server it started at once (`SIGTERM`, then `SIGKILL` a few seconds later)
+rather than leave it running.
 
 `--dir` holds `policy.json`, `audit.jsonl` and, while stopped, `stop`. The guard
 reads one call on stdin and **exits 0 and prints nothing** when the policy has no

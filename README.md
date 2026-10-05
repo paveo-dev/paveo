@@ -13,6 +13,12 @@ a gate that inspects the request and rejects it before it takes effect.
 **Nothing leaves your machine.** Paveo runs in your own process, opens no network
 sockets (a test fails the build if it does), and installs no other package.
 
+**Design partners.** With a small group of teams putting agents into production,
+we are building what comes next to the rules and the record below: judgment for
+grey-zone calls the rules allow, which can only make a decision stricter, and
+approval by a person when a call is unclear. Neither is in the library yet.
+[Want in?](https://paveo.vercel.app/#partners)
+
 ```
 pip install paveo            # Python 3.11+ (python3 --version), macOS or Linux
 ```
@@ -337,7 +343,14 @@ says so.
 
 **What the guard cannot do.** It matches patterns in a command. It does not
 understand the shell, so `rm -r -f`, a command hidden in a variable, or a script
-that does the deleting will get past it. It sees tool calls, not model calls, so
+that does the deleting will get past it. A file the agent writes is judged by
+its path as written and by the file it really reaches through symbolic links
+and `..` (a hard link is judged by its own name),
+but a link made after the guard said yes and before the agent opened the file
+is followed: only the code that opens a file can close that race
+([THREAT_MODEL.md](docs/THREAT_MODEL.md), T10). Because that real path is judged in full,
+a policy rule that lists permitted folders by relative name (`src/.*`) must also
+accept the full form, and a project kept inside `~/.codex` has its edits refused. It sees tool calls, not model calls, so
 it caps no spend. For `requires`, `rate` and `repeat` it remembers each agent
 session, in Claude Code, Codex or Cursor, in `.paveo/memory/`: one file per
 session, private to you, holding salted digests and times, never a command, and
@@ -346,6 +359,51 @@ that session until you delete it, and a call with no session id is refused by
 any tool that has such a rule. And an agent that finds a way to edit the hook
 settings can switch it off. The starter policy refuses the obvious ways, which
 is not all of them. It is a seatbelt, not a sandbox.
+
+## Any MCP client, any language
+
+`paveo mcp` sits between an MCP client (Claude Desktop, Cursor, Windsurf, n8n's
+MCP node, anything that starts a server over stdio) and a local MCP server, and
+checks every tool call against your policy before the server sees it. A refused
+call never reaches the server: the client gets a tool result marked as an error,
+naming the rule, and the model reads it. There is no code to write, in whatever
+language your agent is built.
+
+In the client's MCP settings, put `paveo mcp` in front of the server's own
+command, with full paths:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "/Users/you/.paveo/bin/paveo",
+      "args": ["mcp", "--agent", "filesystem", "--dir", "/Users/you/project/.paveo",
+               "--", "npx", "-y", "@modelcontextprotocol/server-filesystem",
+               "/Users/you/project"]
+    }
+  }
+}
+```
+
+The policy declares an agent with the id after `--agent`, and the server's tools
+it may call, by the names the server lists them under. As everywhere in Paveo, a
+tool the policy does not allow is refused, and every rule works here: argument
+limits, order, rates and repeats, for as long as the client keeps the server
+running. `paveo stop` refuses every call of a server already running, and each
+decision is one record in the audit log. Paveo will not start the server if the
+policy does not load, so the client shows a server that failed to start, and
+nothing runs.
+
+**What it does not do.** It judges tool calls only: resources, prompts and
+sampling pass through as they are. It guards local servers over stdio, not
+remote ones over HTTP. A path in a tool's arguments is judged as written: unlike
+the coding-agent hooks, it does not follow symbolic links, so keep the server's
+own allowed folders tight. The server is your own program, and what it does with a
+call it was allowed is its own. A client set up to start the server directly,
+without `paveo mcp`, is not guarded, and nothing in Paveo can see that. A change
+to the policy applies when the client next starts the server. A message it
+cannot read safely (not JSON, over 64 MiB, or naming the same key twice) is
+dropped, and a batch that holds a tool call is refused.
 
 ## Plans
 
@@ -407,6 +465,7 @@ over any budget (`tests/overhead.py`).
 | `check_tool`, recorded | 50 µs | 250 µs |
 | `check_llm` then `record`, both recorded | 130 µs | 600 µs |
 | The coding-agent hook, a whole process, session memory included | 60 ms | 200 ms after Python starts |
+| An MCP tool call, parsed, judged and recorded | 60 µs | 250 µs |
 
 The hook is a new process for each tool call: Python starting takes about
 12 ms of its 60, loading Paveo most of the rest, and the decision a few.
