@@ -362,9 +362,8 @@ is not all of them. It is a seatbelt, not a sandbox.
 
 ## Any MCP client, any language
 
-`paveo mcp` sits between an MCP client (Claude Desktop, Cursor, Windsurf, n8n's
-MCP node, anything that starts a server over stdio) and a local MCP server, and
-checks every tool call against your policy before the server sees it. A refused
+`paveo mcp` sits between an MCP client and a local MCP server the client starts
+over stdio, as Claude Desktop, Cursor and Windsurf do, and checks every tool call against your policy before the server sees it. A refused
 call never reaches the server: the client gets a tool result marked as an error,
 naming the rule, and the model reads it. There is no code to write, in whatever
 language your agent is built.

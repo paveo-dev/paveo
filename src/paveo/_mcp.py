@@ -1,7 +1,7 @@
 """The MCP guard: ``paveo mcp --agent NAME -- <server command>`` (B6, D80).
 
-It sits between any MCP client (Claude Desktop, Cursor, Windsurf, n8n's MCP
-node, anything that starts a server over stdio) and a local stdio MCP server,
+It sits between an MCP client that starts a local server over stdio (Claude
+Desktop, Cursor, Windsurf) and a local stdio MCP server,
 and judges every ``tools/call`` before the server sees it. A refused call never
 reaches the server; the client gets a tool result with ``isError: true`` whose
 text names the rule, which is what MCP gives the model to read (spec
