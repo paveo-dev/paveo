@@ -17,7 +17,7 @@ sockets (a test fails the build if it does), and installs no other package.
 we are building what comes next to the rules and the record below: judgment for
 grey-zone calls the rules allow, which can only make a decision stricter, and
 approval by a person when a call is unclear. Neither is in the library yet.
-[Want in?](https://paveo.vercel.app/#partners)
+[Want in?](https://paveo.dev/#partners)
 
 ```
 pip install paveo            # Python 3.11+ (python3 --version), macOS or Linux
@@ -427,7 +427,7 @@ policy you roll out to everyone.
 
 **Try it on the free plan**: Developer needs no key, no card and no account.
 Paid plans and the design-partner offer are on the
-[pricing page](https://paveo.vercel.app/#pricing).
+[pricing page](https://paveo.dev/#pricing).
 
 **Audit evidence (Team and up):** `paveo evidence --since 2026-09-01 --until
 2026-09-30` writes a folder for an auditor: `report.html` (who was allowed and
