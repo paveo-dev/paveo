@@ -252,7 +252,7 @@ hash-chained, on your disk. Never a prompt, a completion or a tool argument.
 `check_llm`, `wrap_anthropic`, `remaining`, `PolicyDenied.for_model`, the policy
 file with shadow mode, `not_matches`, `requires`, `rate` and `repeat`,
 `verify_chain`, the `paveo` command (`init`, the guard for Claude Code, Codex and
-Cursor, `stop`, `resume`, `replay`, `learn`, `evidence`, `mcp`), starter
+Cursor, `stop`, `resume`, `replay`, `learn`, `evidence`, `mcp`, `doctor`), starter
 policies, and readers for Anthropic, OpenAI Chat Completions and Gemini
 `generate_content` requests. **Not built yet:** `async_session`, and a budget
 shared across processes.
@@ -315,6 +315,23 @@ writes over `policy.json`: read it, then move it over yourself. The hook `init`
 installs sees Bash, Write, Edit and NotebookEdit, so a rule for any other tool
 matters only if you widen its matcher. `replay` and `learn` read Claude Code's
 sessions only.
+
+**Check the hooks you already have.** `paveo doctor`, run in a project, reads
+`.claude/settings.json`, `.claude/settings.local.json`, `~/.claude/settings.json`
+and any script a hook in them names, and names each hook that cannot work as
+written, with the fix. It looks for two faults it can prove from the text: a hook
+that reads `$CLAUDE_TOOL_INPUT`, `$TOOL_INPUT`, `$CLAUDE_FILE_PATH` or a relative,
+which Claude Code never sets (a hook gets the call as JSON on stdin), so it
+always reads an empty value; and a PreToolUse guard that exits 1 and never 2,
+which Claude Code treats as a non-blocking error, so it never blocks. That is
+judged only when every command the hook runs is a shell tool such as `grep`,
+`jq` or `echo`, or a shell script it read: anything else may decide from out of
+sight, so it is left alone. Other faults, a missing `jq` among them, are not looked for. It never
+runs a hook and never prints a command or a script's text, only where each is. Exit 0: nothing found; 1: a fault found; 2: a
+file it could not read, or a `--settings` file that is not there, which it says
+it did not check. It does not need a
+policy, and works whether or not you use Paveo's guard. Pass `--settings FILE`
+to check another file.
 
 **Codex.** Built against Codex's documented hook contract and its source, and
 **it has refused `rm -rf` in a real session** (macOS, 26 Sep 2026). It checks

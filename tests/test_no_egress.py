@@ -362,6 +362,31 @@ def _exercise_command(workdir: Path) -> None:
     assert main(["evidence", "--dir", str(home), "--out", str(evidence)]) == 0
     assert (evidence / "report.html").is_file()
 
+    # Doctor (D86) reads a settings file and the script a hook runs.
+    (workdir / "guard.sh").write_text(
+        'echo "$CLAUDE_TOOL_INPUT" | grep -q rm && exit 1\n'
+    )
+    settings = workdir / "settings.json"
+    settings.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": f"bash {workdir}/guard.sh",
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        )
+    )
+    assert main(["doctor", "--settings", str(settings)]) == 1
+
     # Replay and learn (B3, D53) read session files and write one policy.
     sessions = workdir / "sessions.jsonl"
     sessions.write_text(

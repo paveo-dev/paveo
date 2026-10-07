@@ -10,6 +10,7 @@
     paveo replay claude-code [PATH ...] [--dir .paveo] [--agent claude-code]
     paveo learn claude-code --from-history [PATH ...] [--dir .paveo]
     paveo evidence [--dir .paveo] [--since DATE] [--until DATE] [--out DIR]
+    paveo doctor [--settings FILE ...]
 
 ``--dir`` holds three things, so the hook and the panic button cannot disagree
 about where they are: ``policy.json``, ``audit.jsonl`` and, while stopped,
@@ -31,7 +32,8 @@ process. The standalone no-egress run drives the guard, ``stop``, ``resume`` and
 ``evidence``.
 Setting the guard up, ``init`` and ``--selftest``, lives in ``_setup``; reading
 past sessions, ``replay`` and ``learn``, in ``_replay``; audit evidence, a paid
-feature, in ``_evidence``.
+feature, in ``_evidence``; the hooks a project already has, ``doctor``, in
+``_doctor``.
 """
 
 from __future__ import annotations
@@ -50,7 +52,7 @@ from functools import partial
 from pathlib import Path
 from typing import BinaryIO, TextIO
 
-from . import _evidence, _mcp, enforce
+from . import _doctor, _evidence, _mcp, enforce
 from ._harnesses import (
     CLAUDE_CODE,
     CODEX,
@@ -96,6 +98,16 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return 
             run=run_hook,
             out=sys.stdout,
             global_files=_global_hook_files(harness),
+        )
+    if arguments.command == "doctor":
+        project = Path.cwd()
+        return _doctor.command(
+            [Path(path) for path in arguments.settings]
+            if arguments.settings
+            else _hook_files(CLAUDE_CODE, project),
+            project=project,
+            out=sys.stdout,
+            named=bool(arguments.settings),
         )
     directory = Path(arguments.dir)
     if arguments.command in {"replay", "learn"}:
@@ -562,6 +574,10 @@ def _parser() -> argparse.ArgumentParser:
     evidence.add_argument("--since", type=date.fromisoformat, help="first day, UTC")
     evidence.add_argument("--until", type=date.fromisoformat, help="last day, UTC")
     evidence.add_argument("--out", type=Path, help="new folder to write")
+    doctor = commands.add_parser(
+        "doctor", help="name the Claude Code hooks that cannot work as written"
+    )
+    doctor.add_argument("--settings", action="append", help="settings file to check")
     return parser
 
 
