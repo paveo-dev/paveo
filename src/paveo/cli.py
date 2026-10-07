@@ -82,13 +82,13 @@ _DEADLINE_S = 4.0
 _MAX_CALL_BYTES = _mcp.MAX_MESSAGE_BYTES
 _MAX_PRINCIPAL = 128
 # Paveo sends nothing home (locked decision #2), so the only way to hear from a
-# person who tried it is to ask. Printed after a command a person runs, never by
-# the guard, whose output the agent reads.
+# person who tried it is to ask. Only doctor asks: after init nothing has been
+# tried yet, and its last line must stay the step the person still has to take.
+# On stderr, so doctor's report on stdout stays only findings for scripts.
 _TELL_US = (
     "paveo: tried it? Tell us what worked and what didn't: "
     "https://github.com/paveo-dev/paveo/discussions\n"
 )
-# The file headers of Codex's patch format (codex-rs/apply-patch).
 
 
 def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return per command
@@ -96,7 +96,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return 
     if arguments.command == "init":
         project = Path.cwd()
         harness = HARNESSES[arguments.harness]
-        code = init(
+        return init(
             harness,
             project=project,
             # The program the person ran, which is what the hook must run too.
@@ -106,9 +106,6 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return 
             out=sys.stdout,
             global_files=_global_hook_files(harness),
         )
-        if code == 0:
-            sys.stdout.write(_TELL_US)
-        return code
     if arguments.command == "doctor":
         project = Path.cwd()
         code = _doctor.command(
@@ -119,7 +116,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return 
             out=sys.stdout,
             named=bool(arguments.settings),
         )
-        sys.stdout.write(_TELL_US)
+        if code in {0, 1}:  # it checked something; 2 means it could not
+            sys.stderr.write(_TELL_US)
         return code
     directory = Path(arguments.dir)
     if arguments.command in {"replay", "learn"}:

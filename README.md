@@ -330,7 +330,8 @@ which Claude Code treats as a non-blocking error, so it never blocks. That is
 judged only when every command the hook runs is a shell tool such as `grep`,
 `jq` or `echo`, or a shell script it read: anything else may decide from out of
 sight, so it is left alone. Other faults, a missing `jq` among them, are not looked for. It never
-runs a hook and never prints a command or a script's text, only where each is. Exit 0: nothing found; 1: a fault found; 2: a
+runs a hook and never prints a command or a script's text, only where each is. Its
+report is on stdout; one line on stderr asks how it went, with a link to Discussions. Exit 0: nothing found; 1: a fault found; 2: a
 file it could not read, or a `--settings` file that is not there, which it says
 it did not check. It does not need a
 policy, and works whether or not you use Paveo's guard. Pass `--settings FILE`
