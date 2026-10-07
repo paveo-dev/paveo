@@ -23,6 +23,9 @@ approval by a person when a call is unclear. Neither is in the library yet.
 pip install paveo            # Python 3.11+ (python3 --version), macOS or Linux
 ```
 
+**Tried it?** Paveo sends nothing home, so we only learn what works from you:
+[say hi in Discussions](https://github.com/paveo-dev/paveo/discussions).
+
 ## Two minutes: a seatbelt for your coding agent
 
 For Claude Code, Codex or Cursor, with no code to write. It needs Python 3.11 or

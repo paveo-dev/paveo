@@ -81,6 +81,13 @@ _DEADLINE_S = 4.0
 # A Write can carry a whole file. Over this, the call is refused unread.
 _MAX_CALL_BYTES = _mcp.MAX_MESSAGE_BYTES
 _MAX_PRINCIPAL = 128
+# Paveo sends nothing home (locked decision #2), so the only way to hear from a
+# person who tried it is to ask. Printed after a command a person runs, never by
+# the guard, whose output the agent reads.
+_TELL_US = (
+    "paveo: tried it? Tell us what worked and what didn't: "
+    "https://github.com/paveo-dev/paveo/discussions\n"
+)
 # The file headers of Codex's patch format (codex-rs/apply-patch).
 
 
@@ -89,7 +96,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return 
     if arguments.command == "init":
         project = Path.cwd()
         harness = HARNESSES[arguments.harness]
-        return init(
+        code = init(
             harness,
             project=project,
             # The program the person ran, which is what the hook must run too.
@@ -99,9 +106,12 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return 
             out=sys.stdout,
             global_files=_global_hook_files(harness),
         )
+        if code == 0:
+            sys.stdout.write(_TELL_US)
+        return code
     if arguments.command == "doctor":
         project = Path.cwd()
-        return _doctor.command(
+        code = _doctor.command(
             [Path(path) for path in arguments.settings]
             if arguments.settings
             else _hook_files(CLAUDE_CODE, project),
@@ -109,6 +119,8 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return 
             out=sys.stdout,
             named=bool(arguments.settings),
         )
+        sys.stdout.write(_TELL_US)
+        return code
     directory = Path(arguments.dir)
     if arguments.command in {"replay", "learn"}:
         # Claude Code keeps every project's sessions here. Unless told otherwise,

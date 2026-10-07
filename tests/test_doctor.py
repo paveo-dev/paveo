@@ -354,3 +354,24 @@ def test_a_shared_script_is_read_once_and_reported_once(tmp_path: Path) -> None:
         hook.chmod(0o600)
     assert code == 2
     assert out.count("guard.sh: could not read it") == 1
+
+
+def test_the_command_ends_by_asking_how_it_went(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _settings(tmp_path, _one("PreToolUse", "jq -r .tool_input.command"))
+    assert main(["doctor", "--settings", str(path)]) == 0
+    out = capsys.readouterr().out
+    assert out.endswith("https://github.com/paveo-dev/paveo/discussions\n")
+
+
+@pytest.mark.parametrize(("code", "asked"), [(0, True), (1, False)])
+def test_init_asks_only_after_it_worked(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    code: int,
+    asked: bool,
+) -> None:
+    monkeypatch.setattr("paveo.cli.init", lambda *_a, **_k: code)
+    assert main(["init", "claude-code"]) == code
+    assert ("paveo/discussions" in capsys.readouterr().out) is asked
