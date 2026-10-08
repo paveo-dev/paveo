@@ -9,11 +9,12 @@ when it is wrong: Claude Code runs it, it lets the call through, and nothing
 says so. ``doctor`` reads the settings files Claude Code reads hooks from, and
 any script a hook names, and names two faults it can prove from the text alone:
 
-- **A variable Claude Code never sets.** A hook gets the call as JSON on stdin.
+- **A variable Claude Code does not set.** A hook gets the call as JSON on stdin.
   ``$CLAUDE_TOOL_INPUT``, ``$TOOL_INPUT``, ``$CLAUDE_FILE_PATH`` and their
-  relatives are not set (the hooks reference lists what is, and a hook run by
-  Claude Code 2.1.292 saw all of them empty, 7 Oct 2026), so a hook that reads
-  one always reads nothing. A name the hook assigns itself, or the settings'
+  relatives are not set: the hooks reference has never listed them (archived
+  copies from launch week, July 2025, on), and a hook run by Claude Code
+  2.1.292 saw all of them empty, 7 Oct 2026. A hook that reads one always reads
+  nothing. A name the hook assigns itself, or the settings'
   own ``env`` sets, is not reported.
 - **``exit 1`` in a guard that never exits 2.** Only exit 2, or a printed
   decision, blocks a PreToolUse call; exit 1 is a non-blocking error and the
@@ -163,6 +164,12 @@ _STDIN = re.compile(
     re.MULTILINE,
 )
 _COMMENT = re.compile(r"\s*(?:#|//)")
+# Paveo sends nothing home (locked decision #2), so the only way to hear from a
+# person who tried it is to ask; only after doctor actually checked a hook (D86).
+_TELL_US = (
+    "paveo: tried it? Tell us what worked and what didn't: "
+    "https://github.com/paveo-dev/paveo/discussions\n"
+)
 _MAX_BYTES = 1 << 20
 
 
@@ -180,6 +187,7 @@ class _Scripts:
     project: Path
     unread: list[str]
     texts: dict[Path, str | None] = field(default_factory=dict)
+    failed: set[Path] = field(default_factory=set)
 
     def named_in(self, command: str) -> dict[str, tuple[Path, str | None]]:
         """Every script path ``command`` names, as written, with its text, or
@@ -206,17 +214,27 @@ class _Scripts:
                 try:
                     self.texts[path] = _read(path).decode("utf-8", "replace")
                 except OSError as e:
+                    self.failed.add(path)
                     self.unread.append(f"{path}: could not read it ({_reason(e)})")
         return self.texts[path]
 
 
 def command(
-    files: Sequence[Path], *, project: Path, out: TextIO, named: bool = False
+    files: Sequence[Path],
+    *,
+    project: Path,
+    out: TextIO,
+    named: bool = False,
+    feedback: TextIO | None = None,
 ) -> int:
     """Report each hook in ``files`` that cannot work as written; see the module.
 
     ``named``: the files were asked for by name, so one that is not there is
-    reported as unread rather than passed over."""
+    reported as unread rather than passed over. ``feedback``: where to ask how
+    it went, once at least one hook was fully checked (every script it names
+    read), and only if it is a terminal: never with the findings on ``out``,
+    which scripts read, and never into a CI log. The checker decides because
+    only it knows what it read (D86)."""
     hooks: list[_Hook] = []
     env: set[str] = set()
     unread: list[str] = []
@@ -233,12 +251,14 @@ def command(
         hooks.extend(found)
         unread.extend(odd)
     scripts = _Scripts(project, unread)
-    faults = 0
+    faults = checked = 0
     for hook in hooks:
         problems = list(_problems(hook, env=env, scripts=scripts))
         for problem in problems:
             out.write(f"{_shown(hook.where)}: {problem}\n")
         faults += bool(problems)
+        its_scripts = scripts.named_in(hook.command).values()
+        checked += not any(path in scripts.failed for path, _ in its_scripts)
     for line in unread:
         out.write(f"paveo: {_shown(line)}. Not checked.\n")
     if read == 0 and not unread:
@@ -252,6 +272,8 @@ def command(
         f"paveo: checked {len(hooks)} command hook{'s' * (len(hooks) != 1)} in "
         f"{read} file{'s' * (read != 1)}: {faults} cannot work as written.\n"
     )
+    if feedback is not None and checked and feedback.isatty():
+        feedback.write(_TELL_US)
     if unread:
         return 2
     return 1 if faults else 0
@@ -327,7 +349,7 @@ def _problems(hook: _Hook, *, env: set[str], scripts: _Scripts) -> Iterator[str]
         ):
             continue
         yield (
-            f"reads ${name}, which Claude Code never sets, so it always reads an "
+            f"reads ${name}, which Claude Code does not set, so it always reads an "
             "empty value. The call arrives as JSON on stdin: read it from there, "
             f"e.g. jq -r .tool_input, instead of ${name}."
         )

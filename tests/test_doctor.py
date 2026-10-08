@@ -30,8 +30,13 @@ GOFMT = 'test "${CLAUDE_FILE_PATH##*.}" = "go" && gofmt -w "$CLAUDE_FILE_PATH" |
 STELLAR = "git-secrets --scan $CLAUDE_FILE_PATHS 2>/dev/null || exit 1"
 
 
-def _settings(tmp_path: Path, hooks: dict[str, object], **extra: object) -> Path:
-    path = tmp_path / ".claude" / "settings.json"
+def _settings(
+    tmp_path: Path,
+    hooks: dict[str, object],
+    name: str = "settings.json",
+    **extra: object,
+) -> Path:
+    path = tmp_path / ".claude" / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"hooks": hooks, **extra}))
     return path
@@ -232,7 +237,7 @@ def test_the_command_checks_the_files_it_is_given(
 def test_a_comment_naming_a_variable_is_not_a_read(tmp_path: Path) -> None:
     hook = tmp_path / "guard.sh"
     hook.write_text(
-        "#!/bin/bash\n# Claude Code never sets $CLAUDE_TOOL_INPUT, so read stdin.\n"
+        "#!/bin/bash\n# Claude Code does not set $CLAUDE_TOOL_INPUT, so read stdin.\n"
         "jq -r .tool_input.command | grep -q rm && exit 2\nexit 0\n"
     )
     path = _settings(tmp_path, _one("PreToolUse", "bash guard.sh"))
@@ -356,27 +361,66 @@ def test_a_shared_script_is_read_once_and_reported_once(tmp_path: Path) -> None:
     assert out.count("guard.sh: could not read it") == 1
 
 
+class _Terminal(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
 @pytest.mark.parametrize(
-    ("cmd", "code", "asked"),
+    ("files", "code", "asked"),
     [
-        ("jq -r .tool_input.command", 0, True),
-        ('echo "$CLAUDE_TOOL_INPUT"', 1, True),
-        (None, 2, False),  # a file it could not read: nothing was tried
+        (["works"], 0, True),
+        (["broken"], 1, True),
+        (["works", "garbled"], 2, True),  # one file unread, but a hook was checked
+        (["garbled"], 2, False),  # nothing checked at all
+        (["unreadable"], 2, False),  # its only script could not be read
     ],
 )
-def test_doctor_asks_on_stderr_only_when_it_checked(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    cmd: str | None,
-    code: int,
-    asked: bool,
+def test_doctor_asks_only_when_a_hook_was_fully_checked(
+    tmp_path: Path, files: list[str], code: int, asked: bool
 ) -> None:
-    if cmd is None:
-        path = tmp_path / "settings.json"
-        path.write_text("{")
-    else:
-        path = _settings(tmp_path, _one("PreToolUse", cmd))
-    assert main(["doctor", "--settings", str(path)]) == code
-    captured = capsys.readouterr()
-    assert "paveo/discussions" not in captured.out
-    assert ("paveo/discussions" in captured.err) is asked
+    hooks = {
+        "works": "jq -r .tool_input.command",
+        "broken": 'echo "$CLAUDE_TOOL_INPUT"',
+        "unreadable": "bash guard.sh",
+    }
+    paths = []
+    for name in files:
+        if name == "garbled":
+            path = tmp_path / "garbled.json"
+            path.write_text("{")
+        else:
+            path = _settings(tmp_path, _one("PreToolUse", hooks[name]), f"{name}.json")
+        paths.append(path)
+    guard = tmp_path / "guard.sh"
+    guard.write_text("exit 0\n")
+    guard.chmod(0)
+    if "unreadable" in files and os.access(guard, os.R_OK):
+        pytest.skip("running as a user who can read anything")
+    out, feedback = io.StringIO(), _Terminal()
+    try:
+        assert command(paths, project=tmp_path, out=out, feedback=feedback) == code
+    finally:
+        guard.chmod(0o600)
+    assert "paveo/discussions" not in out.getvalue()
+    assert ("paveo/discussions" in feedback.getvalue()) is asked
+
+
+def test_doctor_never_asks_into_a_pipe_or_a_ci_log(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = _settings(tmp_path, _one("PreToolUse", 'echo "$CLAUDE_TOOL_INPUT"'))
+    assert main(["doctor", "--settings", str(path)]) == 1
+    assert "paveo/discussions" not in capsys.readouterr().err
+
+
+def test_doctor_does_not_ask_when_no_settings_were_found(tmp_path: Path) -> None:
+    out, feedback = io.StringIO(), _Terminal()
+    assert (
+        command(
+            [tmp_path / "absent.json"], project=tmp_path, out=out, feedback=feedback
+        )
+        == 0
+    )
+    assert "nothing was checked" in out.getvalue()
+    assert feedback.getvalue() == ""

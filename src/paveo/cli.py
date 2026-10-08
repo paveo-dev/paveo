@@ -81,14 +81,6 @@ _DEADLINE_S = 4.0
 # A Write can carry a whole file. Over this, the call is refused unread.
 _MAX_CALL_BYTES = _mcp.MAX_MESSAGE_BYTES
 _MAX_PRINCIPAL = 128
-# Paveo sends nothing home (locked decision #2), so the only way to hear from a
-# person who tried it is to ask. Only doctor asks: after init nothing has been
-# tried yet, and its last line must stay the step the person still has to take.
-# On stderr, so doctor's report on stdout stays only findings for scripts.
-_TELL_US = (
-    "paveo: tried it? Tell us what worked and what didn't: "
-    "https://github.com/paveo-dev/paveo/discussions\n"
-)
 
 
 def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return per command
@@ -108,17 +100,15 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return 
         )
     if arguments.command == "doctor":
         project = Path.cwd()
-        code = _doctor.command(
+        return _doctor.command(
             [Path(path) for path in arguments.settings]
             if arguments.settings
             else _hook_files(CLAUDE_CODE, project),
             project=project,
             out=sys.stdout,
             named=bool(arguments.settings),
+            feedback=sys.stderr,
         )
-        if code in {0, 1}:  # it checked something; 2 means it could not
-            sys.stderr.write(_TELL_US)
-        return code
     directory = Path(arguments.dir)
     if arguments.command in {"replay", "learn"}:
         # Claude Code keeps every project's sessions here. Unless told otherwise,

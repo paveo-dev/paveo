@@ -23,6 +23,11 @@ approval by a person when a call is unclear. Neither is in the library yet.
 pip install paveo            # Python 3.11+ (python3 --version), macOS or Linux
 ```
 
+**Quickest try, nothing installed:** `uvx paveo doctor`, run in any project with
+Claude Code hooks, names the ones that cannot work as written, such as guards that
+can never block. (`uvx` comes with
+[uv](https://docs.astral.sh/uv/) and fetches a suitable Python itself.)
+
 **Tried it?** Paveo sends nothing home, so we only learn what works from you:
 [say hi in Discussions](https://github.com/paveo-dev/paveo/discussions).
 
@@ -324,14 +329,15 @@ sessions only.
 and any script a hook in them names, and names each hook that cannot work as
 written, with the fix. It looks for two faults it can prove from the text: a hook
 that reads `$CLAUDE_TOOL_INPUT`, `$TOOL_INPUT`, `$CLAUDE_FILE_PATH` or a relative,
-which Claude Code never sets (a hook gets the call as JSON on stdin), so it
-always reads an empty value; and a PreToolUse guard that exits 1 and never 2,
+which Claude Code does not set and its docs have never listed (a hook gets the
+call as JSON on stdin), so it always reads an empty value; and a PreToolUse guard that exits 1 and never 2,
 which Claude Code treats as a non-blocking error, so it never blocks. That is
 judged only when every command the hook runs is a shell tool such as `grep`,
 `jq` or `echo`, or a shell script it read: anything else may decide from out of
 sight, so it is left alone. Other faults, a missing `jq` among them, are not looked for. It never
 runs a hook and never prints a command or a script's text, only where each is. Its
-report is on stdout; one line on stderr asks how it went, with a link to Discussions. Exit 0: nothing found; 1: a fault found; 2: a
+report is on stdout; once it has checked at least one hook, one line on stderr asks
+how it went, with a link to Discussions. Exit 0: nothing found; 1: a fault found; 2: a
 file it could not read, or a `--settings` file that is not there, which it says
 it did not check. It does not need a
 policy, and works whether or not you use Paveo's guard. Pass `--settings FILE`

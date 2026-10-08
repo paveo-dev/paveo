@@ -870,6 +870,8 @@ def test_init_sets_up_a_project_that_refuses_rm_rf(tmp_path: Path) -> None:
 
     assert code == 0, out
     assert "ok" in out
+    # Its last line is the step the person still has to take, not an ask (D86).
+    assert "paveo/discussions" not in out
     home = project / ".paveo"
     starter = Path(paveo.__file__).parent / "starters" / "claude-code.json"
     assert (home / "policy.json").read_text("utf-8") == starter.read_text("utf-8")
