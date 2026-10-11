@@ -161,6 +161,68 @@ def test_a_script_the_hook_runs_is_read(tmp_path: Path) -> None:
     assert "exits 1 and never 2" in out
 
 
+POST_EDIT = (
+    '#!/bin/bash\nFILE=$(echo "$CLAUDE_TOOL_INPUT" | python3 -c '
+    '\'import json,sys; print(json.load(sys.stdin).get("file_path",""))\')\n'
+)
+
+
+@pytest.mark.parametrize(
+    "where",
+    [
+        # konjoai/squish, 11 Oct: passed as clean by 0.1.3.
+        '"$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.claude/hooks/x.sh"',
+        '"$(git rev-parse --show-toplevel)"/.claude/hooks/x.sh',
+        "$(git rev-parse --show-toplevel)/.claude/hooks/x.sh",
+        "`git rev-parse --show-toplevel`/.claude/hooks/x.sh",
+        '"$(git rev-parse --show-toplevel 2>/dev/null || echo $(pwd))'
+        '/.claude/hooks/x.sh"',
+        '"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/hooks/x.sh"',
+        '"$CLAUDE_PROJECT_DIR/.claude/hooks/x.sh"',
+    ],
+)
+def test_a_script_named_from_the_project_or_git_top_level_is_read(
+    tmp_path: Path, where: str
+) -> None:
+    (tmp_path / ".git").mkdir()
+    hook = tmp_path / ".claude" / "hooks" / "x.sh"
+    hook.parent.mkdir(parents=True)
+    hook.write_text(POST_EDIT)
+    cmd = f"bash {where}"
+    path = _settings(tmp_path, _one("PostToolUse", cmd, matcher="Edit|Write"))
+    code, out = _doctor(tmp_path, [path])
+    assert (code, "reads $CLAUDE_TOOL_INPUT," in out) == (1, True)
+
+
+def test_the_git_top_level_is_found_above_a_nested_project(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    hook = tmp_path / ".claude" / "hooks" / "x.sh"
+    hook.parent.mkdir(parents=True)
+    hook.write_text(POST_EDIT)
+    app = tmp_path / "packages" / "app"
+    cmd = 'bash "$(git rev-parse --show-toplevel)/.claude/hooks/x.sh"'
+    path = _settings(app, _one("PostToolUse", cmd, matcher="Edit|Write"))
+    code, out = _doctor(app, [path])
+    assert (code, "reads $CLAUDE_TOOL_INPUT," in out) == (1, True)
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        'echo "in $(pwd)"; npx my-guard; echo "done"; exit 1',
+        'echo "root=$(git rev-parse --show-toplevel)"; some-bin; echo "x"; exit 1',
+        "echo \"don't\"; some-bin; echo 'x'; exit 1",
+    ],
+)
+def test_a_command_between_quoted_strings_is_still_judged(
+    tmp_path: Path, cmd: str
+) -> None:
+    # Each runs a program doctor does not know, which may block: not reported.
+    path = _settings(tmp_path, _one("PreToolUse", cmd))
+    code, out = _doctor(tmp_path, [path])
+    assert (code, "exits 1 and never 2" in out) == (0, False)
+
+
 def test_a_script_that_hands_off_is_not_judged_on_its_exit(tmp_path: Path) -> None:
     hook = tmp_path / "guard.sh"
     hook.write_text("python3 check.py || exit 1\n")

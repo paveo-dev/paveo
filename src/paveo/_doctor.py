@@ -74,7 +74,22 @@ _READS_BY_SUFFIX = {
     ".rb": (_RUBY_READ,),
 }
 _SHELL_READS = (_SHELL_READ, _PYTHON_READ, _NODE_READ, _RUBY_READ)
-_PROJECT, _HOME = "@@PROJECT@@", "@@HOME@@"
+_PROJECT, _TOP, _HOME = "@@PROJECT@@", "@@TOP@@", "@@HOME@@"
+# The ways a hook names the project, the git top level and home. ``$(git
+# rev-parse --show-toplevel)`` passed a public repo's broken hook as clean, 11 Oct.
+_GIT_TOP = (
+    r"\$\(\s*git\s+rev-parse\s+--show-toplevel(?:[^()]|\$\([^()]*\))*\)"
+    r"|`\s*git\s+rev-parse\s+--show-toplevel[^`]*`"
+)
+_MARKS = (
+    (r"\$\{CLAUDE_PROJECT_DIR(?::-[^}]*)?\}|\$CLAUDE_PROJECT_DIR\b", _PROJECT),
+    (_GIT_TOP, _TOP),
+    (r"\$\{HOME\}|\$HOME\b", _HOME),
+)
+# A quoted string, scanned left to right so each closing quote ends its own
+# string: ``"[^"$]*"`` alone paired the end of ``"in $(pwd)"`` with the start of
+# the next string and hid the command between them.
+_QUOTED = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"")
 _SCRIPT = re.compile(
     r"[^\s\"'`|;&()<>=]+\.(?:sh|bash|zsh|py|js|mjs|cjs|ts|rb)(?![\w.])"
 )
@@ -195,17 +210,22 @@ class _Scripts:
         found: dict[str, tuple[Path, str | None]] = {}
         for match in _SCRIPT.finditer(_marked(command)):
             word = match.group()
-            path = Path(
-                os.path.expanduser(
-                    word.replace(_PROJECT, str(self.project)).replace(
-                        _HOME, str(Path.home())
-                    )
-                )
-            )
+            resolved = word.replace(_PROJECT, str(self.project))
+            if _TOP in resolved:
+                resolved = resolved.replace(_TOP, str(self._top()))
+            path = Path(os.path.expanduser(resolved.replace(_HOME, str(Path.home()))))
             if not path.is_absolute():
                 path = self.project / path
             found[word] = (path, self._text(path))
         return found
+
+    def _top(self) -> Path:
+        """What ``git rev-parse --show-toplevel`` prints for the project: the
+        nearest directory holding ``.git``, or the project when none does."""
+        for directory in (self.project, *self.project.parents):
+            if (directory / ".git").exists():
+                return directory
+        return self.project
 
     def _text(self, path: Path) -> str | None:
         if path not in self.texts:
@@ -378,8 +398,7 @@ def _only_known(named: dict[str, tuple[Path, str | None]], texts: list[str]) -> 
     if len(shell) != len(named):
         return False
     for text in texts:
-        bare = re.sub(r"'[^']*'", "''", _marked(text))
-        bare = re.sub(r"\"[^\"$`]*\"", '""', bare)
+        bare = _QUOTED.sub(_emptied, _marked(text))
         for segment in _SEPARATOR.split(bare):
             words = [w.strip("\"'") for w in segment.split()]
             while words and (words[0] in _KEYWORDS or _ASSIGNMENT.fullmatch(words[0])):
@@ -392,11 +411,21 @@ def _only_known(named: dict[str, tuple[Path, str | None]], texts: list[str]) -> 
     return True
 
 
+def _emptied(quoted: re.Match[str]) -> str:
+    """A quoted string with nothing that could run in it, emptied; one that can
+    expand (``$``, a backtick) is kept, so the commands inside it are judged."""
+    text = quoted.group()
+    return text if text[0] == '"' and re.search(r"[$`]", text) else text[0] * 2
+
+
 def _marked(text: str) -> str:
-    """``text`` with the project and home variables as markers, so a script path
-    written ``"$CLAUDE_PROJECT_DIR"/x.sh`` is one word that can be resolved."""
-    text = re.sub(r"\"?\$\{?CLAUDE_PROJECT_DIR\}?\"?", _PROJECT, text)
-    return re.sub(r"\"?\$\{?HOME\}?\"?", _HOME, text)
+    """``text`` with the project, git top level and home as markers, so a script
+    path written ``"$CLAUDE_PROJECT_DIR"/x.sh`` is one word that can be resolved.
+    A quote is taken only with its partner, so the quoting the rest of the
+    command relies on is left as it was."""
+    for form, marker in _MARKS:
+        text = re.sub(rf'"(?:{form})"|(?:{form})', marker, text)
+    return text
 
 
 def _assigns(name: str, text: str) -> bool:
