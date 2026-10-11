@@ -10,7 +10,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "paveo"
 version = "0.1.5.dev0"
-description = "Rules and proof for what your AI agents do: every call checked before it happens, in your own process."
+description = "Rules for every AI coding agent your team runs: Claude Code, Codex and Cursor ask before shell commands and file writes, with a record that proves it."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "MD Faiz Jamal" }]
@@ -19,7 +19,7 @@ authors = [{ name = "MD Faiz Jamal" }]
 # source on a date you must maintain per release. See D22.
 license = "Elastic-2.0"
 license-files = ["LICENSE"]
-keywords = ["agents", "admission-control", "budget", "policy", "llm"]
+keywords = ["agents", "coding-agents", "claude-code", "policy", "llm"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

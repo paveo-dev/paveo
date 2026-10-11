@@ -1,32 +1,35 @@
 # Paveo
 
-**Stops the call your agent shouldn't make — before it makes it.**
+**Rules for every AI coding agent your team runs.**
 
-Every tool in this space tells you what your agent *already did*. Paveo sits
-between your agent and everything it calls (a tool, a shell command, a model)
-and checks each call against a policy you write: which tools, with which
-arguments, in what order, how often, at what cost. A call the policy does not
-allow is refused before it leaves, and every decision goes into a hash-chained
-audit log on your disk. That is **admission control**, in the Kubernetes sense:
-a gate that inspects the request and rejects it before it takes effect.
+Claude Code, Codex and Cursor ask Paveo before they run a shell command or
+write a file. `rm -rf`, `git push --force`, `DROP TABLE` and the obvious ways of
+editing the guard itself are refused, the agent is told why and tries something
+else, and every decision goes into a hash-chained record your security team can
+verify. It matches patterns, so it is a seatbelt, not a sandbox, and the Cursor
+guard has not been tried in a real session yet
+([details](#coding-agents-claude-code-codex-and-cursor)).
 
-**Nothing leaves your machine.** Paveo runs in your own process, opens no network
-sockets (a test fails the build if it does), and installs no other package.
+**Nothing leaves your machine.** Paveo runs on each engineer's machine, opens no
+network sockets (a test fails the build if it does), and installs no other package.
 
-**Design partners.** With a small group of teams putting agents into production,
-we are building what comes next to the rules and the record below: judgment for
-grey-zone calls the rules allow, which can only make a decision stricter, and
-approval by a person when a call is unclear. Neither is in the library yet.
-[Want in?](https://paveo.dev/#partners)
+**First, check the guards you already have:** `uvx paveo doctor`, run in any
+project with Claude Code hooks, names the ones that cannot work as written, such
+as guards that can never block. (`uvx` comes with
+[uv](https://docs.astral.sh/uv/) and fetches a suitable Python itself.)
 
 ```
 pip install paveo            # Python 3.11+ (python3 --version), macOS or Linux
 ```
 
-**Quickest try, nothing installed:** `uvx paveo doctor`, run in any project with
-Claude Code hooks, names the ones that cannot work as written, such as guards that
-can never block. (`uvx` comes with
-[uv](https://docs.astral.sh/uv/) and fetches a suitable Python itself.)
+**For a whole team:** the same rules on every engineer's machine, and, on Team
+and up, evidence from each one's log. We set it up with you:
+[talk to us](https://paveo.dev/#contact).
+
+Paveo also guards agents you build yourself (every tool call and model call
+checked against a policy, with a budget) and
+[any MCP server](#any-mcp-client-any-language); see
+[guard your own agent](#five-minutes-guard-your-own-agent).
 
 **Tried it?** Paveo sends nothing home, so we only learn what works from you:
 [say hi in Discussions](https://github.com/paveo-dev/paveo/discussions).
