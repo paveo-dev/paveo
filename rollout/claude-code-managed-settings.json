@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh /opt/paveo/guard claude-code",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

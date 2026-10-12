@@ -1,0 +1,191 @@
+#!/bin/sh
+# Paveo's hook for a company rollout (D89): `guard <agent> [--plugin]`.
+#
+# Without --plugin it is the managed hook an administrator installs at
+# /opt/paveo/guard for Claude Code and Codex. Everything it trusts is inside
+# /opt/paveo, owned by root: the policy and licence key beside this script (a
+# signed key in ~/.paveo/managed counts when none is), a standalone Python in
+# /opt/paveo/python and paveo in the venv /opt/paveo/venv made from it. Each
+# person's log, stop file and session memory go in ~/.paveo/managed. Only that
+# paveo runs, never one found on PATH or in a home folder.
+#
+# With --plugin it runs inside Paveo's Claude Code plugin: the policy the plugin
+# ships, the plugin's data folder, and the paveo the README installs at
+# ~/.paveo. That mode is a seatbelt against mistakes, not against an agent set
+# on removing it: every file it uses belongs to the person (docs/ROLLOUT.md).
+#
+# Every way this script can fail exits 2, which blocks the call: each agent lets
+# a call through on any other exit, so a guard that cannot run must refuse rather
+# than step aside (locked decision #4). Python runs with -I, so no PYTHONPATH,
+# user site folder or working folder can change which paveo answers. The script
+# never reads the call; the guard reads it from stdin, which passes straight
+# through.
+
+trap 'exit 2' HUP INT TERM
+
+# The managed hook first runs itself again in a cleared environment, through
+# words nothing inherited can change: `case` is a keyword, `exit` a special
+# builtin, and a command named by its full path is never a function. macOS
+# /bin/sh is bash, which loads shell functions from the environment
+# (BASH_FUNC_echo%%), so a function named echo, env or mkdir could otherwise
+# turn every refusal into exit 0 (/code-review, D89); LD_PRELOAD and its kind
+# would load code into the tools below. (One loaded into this first shell
+# itself, before any line runs, no script can undo: THREAT_MODEL.md.) The
+# plugin mode, a seatbelt against mistakes, keeps its environment.
+case ${1-}:${2-} in
+--paveo-clean:*) shift ;;
+*:--plugin) ;;
+*)
+    # Not exec: a failed exec ends the shell with 126 or 127, which every agent
+    # lets through. Run as a child, any status but 0 refuses, whatever failed.
+    # HOME says where this person's log goes; LC_ALL=C makes every comparison
+    # below byte for byte, whatever the inherited locale.
+    /usr/bin/env -i HOME="${HOME-}" LC_ALL=C /bin/sh "$0" --paveo-clean "$@"
+    case $? in
+    0) exit 0 ;;
+    *) exit 2 ;;
+    esac
+    ;;
+esac
+# The tools below come from the system, never from a folder on the inherited
+# PATH the person can write to, such as ~/.local/bin or Homebrew's.
+PATH=/usr/bin:/bin
+export PATH
+
+refuse() {
+    echo "paveo refused this call: $1" >&2
+    exit 2
+}
+
+agent=${1:-}
+case $agent in
+claude-code | codex) ;;
+*) refuse "the hook names no agent this rollout guards (claude-code or codex)." ;;
+esac
+
+if [ "${2:-}" = "--plugin" ]; then
+    root=${CLAUDE_PLUGIN_ROOT:-}
+    data=${CLAUDE_PLUGIN_DATA:-}
+    [ -n "$root" ] && [ -n "$data" ] ||
+        refuse "the Paveo plugin ran without CLAUDE_PLUGIN_ROOT and CLAUDE_PLUGIN_DATA set."
+    [ -n "${HOME:-}" ] || refuse "HOME is not set, so paveo at ~/.paveo cannot be found."
+    policy=$root/policy.json
+    python=$HOME/.paveo/bin/python
+    install="Install it with: python3 -m venv ~/.paveo && ~/.paveo/bin/pip install paveo"
+else
+    [ -n "${HOME:-}" ] || refuse "HOME is not set, so there is no place for this person's log."
+    here=$(cd "$(dirname "$0")" && pwd -P) || refuse "the folder holding this hook could not be read."
+    policy=$here/policy.json
+    data=$HOME/.paveo/managed
+    python=$here/venv/bin/python
+    install="Your administrator installs it as docs/ROLLOUT.md says, in $here/venv."
+fi
+[ -x "$python" ] ||
+    refuse "paveo is not installed where this hook runs it ($python), and this team's coding agents require it. $install"
+
+if [ "${2:-}" != "--plugin" ]; then
+    # Everything this hook trusts lives inside one root-owned folder: the
+    # script, the policy, the key, the venv and the Python the venv runs on (a
+    # standalone build unpacked at $here/python, docs/ROLLOUT.md). A venv reads
+    # its base Python's standard library, and checking an arbitrary install from
+    # here kept missing layouts (Homebrew kegs, links with .., libraries in
+    # other folders: security and code reviews, D89), so the base must be inside
+    # $here, and then all of $here is checked file by file, with every folder
+    # above it, before Python starts.
+    cfg=$here/venv/pyvenv.cfg
+    # Python reads venv/bin/pyvenv.cfg before venv/pyvenv.cfg: only the one
+    # checked here may exist.
+    [ ! -e "$here/venv/bin/pyvenv.cfg" ] && [ ! -L "$here/venv/bin/pyvenv.cfg" ] ||
+        refuse "$here/venv/bin/pyvenv.cfg exists, and Python would read it instead of $cfg."
+    # One key of pyvenv.cfg, read as Python's site.py reads it: case, spaces
+    # and a carriage return around it ignored. Two lines for one key refuse.
+    cfg_value() {
+        awk -F= -v want="$1" '
+            { gsub(/\r/, ""); key = $1; gsub(/^[ \t]+|[ \t]+$/, "", key) }
+            tolower(key) == want {
+                value = substr($0, index($0, "=") + 1)
+                gsub(/^[ \t]+|[ \t]+$/, "", value)
+                seen++
+            }
+            END { if (seen > 1) exit 3; if (seen == 1) print value }
+        ' "$cfg"
+    }
+    base=$(cfg_value home) && system=$(cfg_value include-system-site-packages) ||
+        refuse "$cfg could not be read, or names a key twice, so the Python under it cannot be checked."
+    # Python reads the system's site-packages unless told "false"; those
+    # folders are outside $here, so anything else refuses.
+    [ "$(printf '%s' "$system" | tr 'A-Z' 'a-z')" = false ] ||
+        refuse "$cfg does not set include-system-site-packages = false, so Python would read folders this hook cannot check."
+    # The base Python is the standalone build at $here/python, by that exact
+    # real path: Python looks for its standard library by climbing from home,
+    # so a home elsewhere in $here could lead it to one outside (/code-review).
+    [ "$base" = "$here/python/bin" ] &&
+        [ "$(cd -P "$base" 2>/dev/null && pwd -P)" = "$base" ] ||
+        refuse "home in $cfg is $base, not $here/python/bin. Unpack a standalone Python at $here/python and make the venv from it (docs/ROLLOUT.md)."
+    fix="Your administrator makes $here and everything in it root's and writable by no one else: sudo chown -R root:wheel $here && sudo chmod -R go-w $here, and sudo chmod go-w on any folder above it that this names (docs/ROLLOUT.md)."
+    # A symbolic link's own mode means nothing (Linux makes them all 0777), so a
+    # link is held to its owner here, and where it points is checked below.
+    unsafe='( ! -user root -o ( ! -type l ( -perm -g+w -o -perm -o+w ) ) )'
+    say_unsafe() {
+        refuse "$1 is not owned by root, or others can write to it, so a person or their agent could change what this hook runs. $fix"
+    }
+    # Every folder above $here, up to /: whoever can write one can swap $here.
+    set --
+    folder=$here
+    while [ "$folder" != / ]; do
+        folder=$(dirname "$folder")
+        set -- "$@" "$folder"
+    done
+    # shellcheck disable=SC2086 # $unsafe is find's expression, split on purpose
+    found=$(find "$@" -prune $unsafe -print 2>/dev/null) ||
+        refuse "the folders above $here could not be checked. $fix"
+    [ -z "$found" ] || say_unsafe "$(printf '%s\n' "$found" | head -n 1)"
+    # Then $here itself: the first file or folder that is not root's or that
+    # others can write. A plain -print, which cannot fail the way a command
+    # run by -exec can, and with the link pass below about 70 ms for a Python
+    # of some 11,000 files (130 ms cold), measured on macOS.
+    # shellcheck disable=SC2086 # $unsafe is find's expression, split on purpose
+    found=$(find "$here" $unsafe -print -quit 2>/dev/null) ||
+        refuse "the files in $here could not be checked. $fix"
+    [ -z "$found" ] || say_unsafe "$found"
+    # Then every link that could lead out of $here. Only a link written
+    # absolute, or with .., can: a relative one without .. stays below its own
+    # folder, and any link on its way is a link in $here, judged in its turn.
+    walked=$(find "$here" -type l \( -lname '/*' -o -lname '*..*' \) -print 2>/dev/null) ||
+        refuse "the links in $here could not be checked. $fix"
+    # Each such link must be written as a path in $here, never through a folder
+    # outside that could be swapped after this check, and lead into $here.
+    old_ifs=$IFS
+    IFS='
+'
+    set -f # names from find are split on newlines only, never expanded as patterns
+    for link in $walked; do
+        target=$(readlink "$link") || refuse "the link $link could not be read."
+        case $target in
+        "$here"/*) whole=$target ;;
+        /*) refuse "the link $link points outside $here, to $target." ;;
+        *) whole=$(dirname "$link")/$target ;;
+        esac
+        # A target that is a folder is resolved whole (one ending in .. points
+        # above the folder it is written in); a file, by the folder it is in.
+        if [ -d "$whole" ]; then
+            folder=$(cd -P "$whole" 2>/dev/null && pwd -P)
+        else
+            folder=$(cd -P "$(dirname "$whole")" 2>/dev/null && pwd -P)
+        fi || refuse "the link $link leads nowhere ($target)."
+        case $folder/ in
+        "$here"/*) ;;
+        *) refuse "the link $link leads outside $here, to $folder." ;;
+        esac
+    done
+    set +f
+    IFS=$old_ifs
+    [ -f "$python" ] || refuse "the Python $python leads to could not be found."
+fi
+
+mkdir -p "$data" || refuse "the folder for this person's log, $data, could not be created."
+# In managed mode the environment is already the cleared one above.
+"$python" -I -m paveo.cli guard "$agent" --dir "$data" --policy "$policy"
+status=$?
+[ "$status" -eq 0 ] && exit 0
+exit 2

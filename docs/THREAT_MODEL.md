@@ -296,6 +296,56 @@ apply (T10, D79); the server is the user's program and what
 it does with an allowed call is its own; and a client configured to start the
 server without `paveo mcp` is not guarded, which nothing in Paveo can see.
 
+**The company rollout hook (D89).** `rollout/guard` runs `paveo guard` with a
+policy from one place and each person's log in another. **Managed mode** trusts
+one root-owned folder, `/opt/paveo`, and nothing outside it: the script, the
+policy, the licence key (a signed key in the person's log folder is read when
+none is there, never an unsigned trial, and can only raise how many agents the
+policy covers), a standalone Python at `/opt/paveo/python` and the venv made
+from it, run as `python -I`. In managed mode the script first runs itself
+again under `/usr/bin/env -i`, through words no inherited shell function can
+replace (`case`, `exec`, full paths), so no `LD_PRELOAD`, `DYLD_*` or function
+exported as `BASH_FUNC_name%%` (which macOS's `/bin/sh`, bash, would load)
+reaches its tools or Python. The environment the agent is started with is
+trusted: shells act on some variables before any line runs (below). Before
+Python starts it refuses unless the venv's `home` is exactly
+`/opt/paveo/python/bin` by its real path (Python climbs from `home` for its
+standard library), the venv does not read the system's site-packages
+(Python's default unless `pyvenv.cfg` says `false`), no second `pyvenv.cfg`
+sits in `venv/bin`, every file and folder in `/opt/paveo` and every folder
+above it up to `/` is owned by root and writable by no one else, and every link
+in `/opt/paveo` leads into it: an absolute target written as a path in
+`/opt/paveo`, never through a folder outside that could be swapped after the
+check, and the folder it lies in resolved inside. Six review rounds found ways
+around checking an arbitrary Python install from a shell (writable `os.py`,
+Homebrew kegs and links, libraries in other folders, a link flipped between
+the check and Python starting), so the design stopped checking other installs
+and keeps the whole trusted set in one folder. **Plugin mode** trusts the
+person's own files (the paveo at `~/.paveo`, the plugin's policy under
+`~/.claude/plugins`) and is a seatbelt against mistakes only. **Every failure in
+the script refuses**: no agent named, no plugin paths, no `HOME`, no paveo, a
+file or folder it would not trust, a HUP, INT or TERM while the guard runs, and
+any exit from the guard other than 0, and in managed mode a re-run that could
+not start (what `exec` needs is tested first, because a failed `exec` ends the
+shell with 126 or 127, which agents let through); the script finds its tools on
+`/usr/bin:/bin`, and the hook command runs it through `/bin/sh`, so a lost
+executable bit cannot become a hook that fails to start. **Not covered:** the
+log, stop file and memory in the person's home folder, which a disguised command
+can delete (the hash chain shows an edit, not a deletion); a person with
+administrator rights; system libraries the standalone Python links, such as
+libc, which only root can change; write access granted by an access-control
+list (macOS `chmod +a`, Linux `setfacl`) rather than by mode bits, which `find`
+does not see; any variable a shell acts on at startup in the environment the
+agent starts hooks with, such as a loader variable (`LD_PRELOAD`,
+`DYLD_INSERT_LIBRARIES`) or, for bash, `SHELLOPTS` with `PS4`, which run before
+the hook's first line in the shells that start it (security review, D89), and
+the engineer's shell startup files, such as `~/.zshrc`, which the starter
+policy does not stop the agent writing and which can set such a variable for
+the next session; a timeout or
+`SIGKILL` the agent itself enforces, which Claude
+Code and Codex treat as no objection; Cursor, which is not in the rollout; and
+everything the coding-agent hooks already do not cover (T10).
+
 ---
 
 ## 5. The threat we pose: supply chain

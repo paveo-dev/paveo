@@ -44,7 +44,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import TextIO
 
-from ._licence import plan_in
+from ._licence import plan_beside
 from ._policy_document import load_file
 from .audit import BrokenChain, snapshot, verified_records
 from .errors import ConfigError
@@ -166,7 +166,10 @@ def command(  # noqa: PLR0913 - keyword-only; every path and the clock are injec
 ) -> int:
     """``paveo evidence``: check the plan, export, and say what was written."""
     try:
-        plan = plan_in(directory, today=now.date())
+        # The key beside the policy, else the one in --dir, as the guard reads it (D89).
+        plan = plan_beside(
+            (policy or directory / _POLICY).parent, directory, today=now.date()
+        )
         if "evidence" not in plan.features:
             stdout.write(_upgrade(plan.lapsed, plan.expires, directory))
             return 1

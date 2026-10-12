@@ -114,6 +114,33 @@ def plan_in(directory: Path, *, today: date) -> Plan:
     return read_key(text, today=today)
 
 
+def plan_beside(policy_folder: Path, directory: Path, *, today: date) -> Plan:
+    """The plan for a policy read from ``policy_folder`` and a log in ``directory``
+    (D89), for the guard and ``paveo evidence`` alike: a key beside the policy,
+    which a company ships with it, else one in ``directory`` as before
+    ``--policy`` existed. **From ``directory`` only a signed key counts**: a
+    trial is unsigned, so anyone who can write there could write one and restart
+    it by its date, lifting ``plan_limit`` refusals for good (/code-review, D89).
+    """
+    if (policy_folder / LICENCE_FILE).exists():
+        return plan_in(policy_folder, today=today)
+    location = directory / LICENCE_FILE
+    # Read once: a second read is a gap in which the file could be swapped.
+    try:
+        text = location.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return DEVELOPER
+    except (OSError, UnicodeDecodeError) as e:
+        raise ConfigError(
+            f"the licence key at {location} could not be read.",
+            remedy="fix its permissions, or remove it to use the free plan.",
+        ) from e
+    if text.strip().startswith(TRIAL_PREFIX):
+        return DEVELOPER
+    # The text already read, not a second read a swap could change (/code-review).
+    return read_key(text, today=today)
+
+
 def read_key(text: str, *, today: date) -> Plan:
     """The plan ``text`` grants today, or ``ConfigError`` if it is not a key we
     signed or a trial. An expired key or trial is not an error: it grants

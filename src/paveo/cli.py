@@ -3,10 +3,10 @@
 ::
 
     paveo init {claude-code,codex,cursor}
-    paveo guard {claude-code,codex,cursor} [--dir .paveo] [--agent NAME]
+    paveo guard {claude-code,codex,cursor} [--dir .paveo] [--agent NAME] [--policy FILE]
     paveo guard [AGENT] --selftest [--settings FILE ...]
-    paveo stop [--dir .paveo]
-    paveo resume [--dir .paveo]
+    paveo stop [--dir .paveo] [--policy FILE]
+    paveo resume [--dir .paveo] [--policy FILE]
     paveo replay claude-code [PATH ...] [--dir .paveo] [--agent claude-code]
     paveo learn claude-code --from-history [PATH ...] [--dir .paveo]
     paveo evidence [--dir .paveo] [--since DATE] [--until DATE] [--out DIR]
@@ -14,7 +14,9 @@
 
 ``--dir`` holds three things, so the hook and the panic button cannot disagree
 about where they are: ``policy.json``, ``audit.jsonl`` and, while stopped,
-``stop``.
+``stop``. ``--policy`` reads the policy from elsewhere, for a policy a company
+ships with its rollout, where that folder is not the place to write a log (D89);
+a licence key beside the policy counts, else the one in ``--dir``.
 
 **The guard is a pre-tool hook** for Claude Code, Codex and Cursor, and their
 shared contract decides its shape. Exit 2 blocks the call and hands stderr to
@@ -62,7 +64,7 @@ from ._harnesses import (
     for_policy,
     real_paths,
 )
-from ._licence import apply, plan_in
+from ._licence import apply, plan_beside
 from ._memory import SessionMemory
 from ._policy_document import load_file
 from ._replay import from_history
@@ -124,7 +126,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return 
             out=sys.stdout,
         )
     if arguments.command in {"stop", "resume"}:
-        return _manage(arguments.command, directory)
+        return _manage(arguments.command, directory, arguments.policy)
     if arguments.command == "mcp":
         return _guard_mcp(directory, arguments.agent, arguments.server)
     if arguments.command == "evidence":
@@ -153,7 +155,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return 
             out=sys.stdout,
             codex_config=_codex_home() / "config.toml",
             global_files=_global_hook_files(harness),
-            program=sys.argv[0],
+            program=_program(),
         )
     if arguments.harness is None:
         _parser().error("say which agent to guard: paveo guard claude-code")
@@ -168,15 +170,31 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return 
         stopped=lambda: _stop_file_present(directory / _STOP),
         # The raw word the hook ran paveo by, a full path when init wrote it.
         # Nothing that can raise runs before the guard's own try (D75).
-        program=sys.argv[0],
+        program=_program(),
+        policy=arguments.policy,
     )
 
 
-def _manage(command: str, directory: Path) -> int:
+def _program() -> str:
+    """The word a person types to run paveo: the hook's own path when init wrote
+    it, and the console script beside the interpreter when run as ``python -m
+    paveo.cli``, as the rollout hook does, where ``argv[0]`` is the module's
+    file: on a managed machine ``/opt/paveo/venv/bin/paveo``, not on PATH
+    (/code-review, D89)."""
+    if Path(sys.argv[0]).name != "cli.py":
+        return sys.argv[0]
+    # Called before the guard's own try (D75), so it must not raise:
+    # sys.executable may be empty.
+    if not sys.executable:
+        return "paveo"
+    return os.path.join(os.path.dirname(sys.executable), "paveo")
+
+
+def _manage(command: str, directory: Path, policy: Path | None) -> int:
     """The commands a person runs on ``--dir`` itself."""
     if command == "stop":
-        return stop(directory, out=sys.stdout)
-    return resume(directory, out=sys.stdout)
+        return stop(directory, out=sys.stdout, policy=policy)
+    return resume(directory, out=sys.stdout, policy=policy)
 
 
 def _hook_files(harness: Harness, project: Path) -> list[Path]:
@@ -238,8 +256,12 @@ def guard(  # noqa: PLR0913 - keyword-only; the streams and clock are injected (
     now: Callable[[], datetime] | None = None,
     salt: Callable[[int], bytes] = os.urandom,
     program: str = "paveo",
+    policy: Path | None = None,
 ) -> int:
     """Decide one tool call from ``harness``. Returns the exit code: 0 or 2.
+
+    ``policy`` is ``policy.json`` in ``directory`` unless named; a licence key
+    beside it counts, else the one in ``directory`` (D89).
 
     The policy and the log are opened before the call is read, so a guard that
     refuses an unreadable call has proved both work, which ``--selftest`` relies
@@ -247,23 +269,27 @@ def guard(  # noqa: PLR0913 - keyword-only; the streams and clock are injected (
     for Paveo's own errors, their message, which never holds payload (§8).
     """
     clock = utc_now if now is None else now
+    source = directory / _POLICY if policy is None else policy
     try:
         today = clock().date()
-        policy = apply(
-            load_file(directory / _POLICY), plan_in(directory, today=today), today=today
+        # The key beside the policy, else a signed one in --dir (D89).
+        judged = apply(
+            load_file(source),
+            plan_beside(source.parent, directory, today=today),
+            today=today,
         )
         with AuditLog(directory / _LOG, now=now) as audit:
             tool, arguments, real, principal = _read_call(harness, stdin)
             decide = partial(
                 enforce.check_tool,
-                policy=policy,
+                policy=judged,
                 audit=audit,
                 identity=Identity(agent_id=agent, principal=principal),
                 tool=tool,
                 arguments=arguments,
                 stopped=stopped(),
             )
-            denial = None if real is None else policy.evaluate_tool(agent, tool, real)
+            denial = None if real is None else judged.evaluate_tool(agent, tool, real)
             if (
                 real is not None
                 and denial is not None
@@ -274,7 +300,7 @@ def guard(  # noqa: PLR0913 - keyword-only; the streams and clock are injected (
                 # tell the two apart. Decided on that reading alone, without
                 # memory, so the call is recorded once and counted nowhere.
                 decide(arguments=real, recall=None)
-            elif not policy.needs_memory(agent, tool) or principal is None:
+            elif not judged.needs_memory(agent, tool) or principal is None:
                 # Nothing to read or leave, or no session to keep it for: a rule
                 # that needs memory then refuses as memory_unavailable (D59).
                 decide(recall=None)
@@ -292,13 +318,13 @@ def guard(  # noqa: PLR0913 - keyword-only; the streams and clock are injected (
                         decide(recall=None)
                     else:
                         admitting, admitted = memory.steps(
-                            policy, agent, tool, arguments, recall
+                            judged, agent, tool, arguments, recall
                         )
                         decide(recall=recall, admitting=admitting, admitted=admitted)
     except PolicyDenied as refused:
         return _refuse(harness, refused.for_model, stdout, stderr)
     except PaveoError as e:
-        expected, named = directory / _POLICY, shlex.quote(program)
+        expected, named = source, shlex.quote(program)
         if _absent(expected):
             # Still refused (locked decision #4); only the words differ. A hook
             # in settings a project does not own reaches projects nobody set up,
@@ -487,39 +513,60 @@ def _stop_file_present(path: Path) -> bool:
     return True
 
 
-def stop(directory: Path, *, out: TextIO) -> int:
+def stop(directory: Path, *, out: TextIO, policy: Path | None = None) -> int:
     """Refuse every check under ``directory`` until ``resume``. Idempotent.
 
     Refuses a directory with no policy in it: a stop file written where no guard
-    reads it looks like a stop and is not one (/code-review, D49).
+    reads it looks like a stop and is not one (/code-review, D49). A guard run
+    with ``--policy`` keeps its policy elsewhere, so ``policy`` names it (D89).
     """
-    if not _guarded(directory, out):
+    if not _guarded(directory, out, policy):
         return 1
     descriptor = os.open(directory / _STOP, os.O_WRONLY | os.O_CREAT, 0o600)
     os.close(descriptor)
+    named = "" if policy is None else f" --policy {policy}"
     out.write(
         f"paveo: stopped. Every call guarded from {directory} is refused until "
-        f"`paveo resume --dir {directory}`.\n"
+        f"`paveo resume --dir {directory}{named}`.\n"
     )
     return 0
 
 
-def resume(directory: Path, *, out: TextIO) -> int:
+def resume(directory: Path, *, out: TextIO, policy: Path | None = None) -> int:
     """Lift ``stop``. Idempotent."""
-    if not _guarded(directory, out):
+    if not _guarded(directory, out, policy):
         return 1
     (directory / _STOP).unlink(missing_ok=True)
     out.write(f"paveo: resumed. Calls guarded from {directory} are checked again.\n")
     return 0
 
 
-def _guarded(directory: Path, out: TextIO) -> bool:
-    if (directory / _POLICY).is_file():
+def _guarded(directory: Path, out: TextIO, policy: Path | None) -> bool:
+    # The folder must exist too: a mistyped --dir would otherwise get a stop file
+    # no guard reads, with "stopped" printed over it (D49).
+    if (directory / _POLICY if policy is None else policy).is_file() and (
+        directory.is_dir()
+    ):
         return True
-    out.write(
-        f"paveo: {directory} holds no {_POLICY}, so no guard reads it. Pass the "
-        f"--dir your hook uses, e.g. --dir /path/to/project/.paveo\n"
-    )
+    if directory.exists() and not directory.is_dir():
+        out.write(
+            f"paveo: {directory} is not a folder. Pass the --dir your hook uses.\n"
+        )
+    elif policy is None:
+        out.write(
+            f"paveo: {directory} holds no {_POLICY}, so no guard reads it. Pass "
+            f"the --dir your hook uses, e.g. --dir /path/to/project/.paveo\n"
+        )
+    elif not policy.is_file():
+        out.write(
+            f"paveo: {policy} is not a policy file. Pass the --policy your hook uses.\n"
+        )
+    else:
+        out.write(
+            f"paveo: {directory} does not exist, so no guard reads it. Check the "
+            f"--dir your hook uses; if it has never run on this machine, create "
+            f"the folder first: mkdir -p {directory}\n"
+        )
     return False
 
 
@@ -535,6 +582,9 @@ def _parser() -> argparse.ArgumentParser:
     decide.add_argument("--dir", default=".paveo", help="policy, log and stop file")
     decide.add_argument("--agent", help="agent id in policy (default: the agent)")
     decide.add_argument(
+        "--policy", type=Path, help="policy file (default: policy.json in --dir)"
+    )
+    decide.add_argument(
         "--selftest", action="store_true", help="check the configured hooks refuse"
     )
     decide.add_argument("--settings", action="append", help="hook file to check")
@@ -548,6 +598,9 @@ def _parser() -> argparse.ArgumentParser:
     ):
         command = commands.add_parser(name, help=summary)
         command.add_argument("--dir", default=".paveo")
+        command.add_argument(
+            "--policy", type=Path, help="the policy the hook names, if not in --dir"
+        )
 
     replay = commands.add_parser("replay", help="judge past sessions by the policy")
     learn = commands.add_parser("learn", help="propose a policy from past sessions")

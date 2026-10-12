@@ -6,9 +6,9 @@ Claude Code, Codex and Cursor ask Paveo before they run a shell command or
 write a file. `rm -rf`, `git push --force`, `DROP TABLE` and the obvious ways of
 editing the guard itself are refused, the agent is told why and tries something
 else, and every decision goes into a hash-chained record your security team can
-verify. It matches patterns, so it is a seatbelt, not a sandbox, and the Cursor
-guard has not been tried in a real session yet
-([details](#coding-agents-claude-code-codex-and-cursor)).
+verify. It matches patterns, so it is a seatbelt, not a sandbox. The Cursor
+guard has not been tried in a real session yet, and by Cursor's documentation it
+may refuse every call ([details](#coding-agents-claude-code-codex-and-cursor)).
 
 **Nothing leaves your machine.** Paveo runs on each engineer's machine, opens no
 network sockets (a test fails the build if it does), and installs no other package.
@@ -22,9 +22,16 @@ as guards that can never block. (`uvx` comes with
 pip install paveo            # Python 3.11+ (python3 --version), macOS or Linux
 ```
 
-**For a whole team:** the same rules on every engineer's machine, and, on Team
-and up, evidence from each one's log. We set it up with you:
-[talk to us](https://paveo.dev/#contact).
+**For a whole team:** the hook, one policy, a standalone Python and paveo, all
+inside a root-owned `/opt/paveo`, for Claude Code and Codex on every engineer's
+machine and set in each agent's managed settings; on every call the hook checks
+that everything in `/opt/paveo` is root's, file by file, so the agent cannot
+switch it off through any file the hook runs (it can still edit what the
+engineer's shell starts with, such as `~/.zshrc`: the guide says what is not
+covered); or, without device management, the Claude Code plugin (`/plugin marketplace
+add paveo-dev/paveo`, then `/plugin install paveo@paveo`).
+[docs/ROLLOUT.md](docs/ROLLOUT.md) has both and what each does not cover; we set
+it up with you if you like: [talk to us](https://paveo.dev/#contact).
 
 Paveo also guards agents you build yourself (every tool call and model call
 checked against a policy, with a budget) and
@@ -286,6 +293,12 @@ link, or if the project's `.claude` folder is the one Claude Code reads in every
 project, as it is in your home folder: a guard meant for one project would guard
 them all, so `cd` into the project first.
 
+**One policy for every agent in a project.** Run `init` for a second agent in
+the same project (`init cursor` after `init claude-code`, say) and its starter
+rules are added to the `.paveo/policy.json` already there, so one file covers
+both. The free plan covers two agents per policy: `init` for a third says so and
+changes nothing.
+
 If you move or delete that virtualenv, the hook stops working **silently**:
 Claude Code treats a hook it cannot run as one with no objection. So after any
 change, run `~/.paveo/bin/paveo guard --selftest` in the project. It checks
@@ -358,7 +371,11 @@ hash paveo does not reproduce, so if you change the hook afterwards, look in
 
 **Cursor.** Built against Cursor's documented hook contract; **it has not been
 tried in a real session yet**, because its hooks need a paid Cursor plan. Tell
-us what happens if you try it. It checks every shell command, and `Write` and
+us what happens if you try it. **It may refuse every call:** Cursor's
+documentation says a permission hook that answers with no JSON blocks the action,
+and the guard answers nothing when it allows, so as never to skip Cursor's own
+approval prompt (D57). Until a real session settles which one Cursor does, treat
+the Cursor guard as unproven. It checks every shell command, and `Write` and
 `Delete`, the file tools Cursor's documentation names; a file tool under any
 other name is not seen. The hooks are written with `failClosed: true`, so Cursor
 refuses the call if the guard crashes or times out; `--selftest cursor` fails a
@@ -472,7 +489,7 @@ refuses and says how to widen `--until`, rather than leave that record out. It i
 still tamper-evident, not tamper-proof: what it adds is a copy of the chain's
 hash in someone else's hands, so a later rewrite of the records it covers shows.
 `--log` and `--policy` point it at a library's log and policy; the plan is read
-from `--dir`'s `licence.key`.
+from the `licence.key` beside the policy, else the one in `--dir`.
 
 ## Why
 

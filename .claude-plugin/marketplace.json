@@ -1,0 +1,12 @@
+{
+  "name": "paveo",
+  "description": "Paveo: rules for every AI coding agent your team runs, checked before each action.",
+  "owner": { "name": "Paveo", "url": "https://paveo.dev" },
+  "plugins": [
+    {
+      "name": "paveo",
+      "source": "./plugins/paveo",
+      "description": "Checks every Bash command and file write against your team's policy before Claude Code runs it, and refuses the dangerous ones."
+    }
+  ]
+}

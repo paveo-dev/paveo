@@ -1,0 +1,19 @@
+{
+  "name": "paveo",
+  "displayName": "Paveo",
+  "version": "0.1.0",
+  "description": "Checks every Bash command and file write against your team's policy before Claude Code runs it, and refuses the dangerous ones. Needs paveo installed at ~/.paveo: python3 -m venv ~/.paveo && ~/.paveo/bin/pip install paveo",
+  "author": {
+    "name": "Paveo",
+    "url": "https://paveo.dev"
+  },
+  "homepage": "https://paveo.dev",
+  "repository": "https://github.com/paveo-dev/paveo",
+  "license": "Elastic-2.0",
+  "keywords": [
+    "security",
+    "guardrails",
+    "policy",
+    "hooks"
+  ]
+}

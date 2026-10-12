@@ -1,0 +1,17 @@
+# Paveo's managed hook for Codex: add to /etc/codex/requirements.toml (docs/ROLLOUT.md).
+# Codex trusts a managed hook by policy, so no one has to approve it in /hooks.
+
+[features]
+hooks = true
+
+[hooks]
+managed_dir = "/opt/paveo"
+
+[[hooks.PreToolUse]]
+matcher = "^(?:Bash|apply_patch)$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/bin/sh /opt/paveo/guard codex"
+timeout = 10
+statusMessage = "Paveo: checking against your team's policy"

@@ -22,16 +22,19 @@ import shutil
 import stat
 import tempfile
 import tomllib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date, datetime
 from importlib import resources
 from pathlib import Path
 from typing import TextIO
 
 from ._harnesses import CLAUDE_CODE, CODEX, CURSOR, Harness, for_policy, real_paths
-from ._policy_document import load_file
+from ._licence import DEVELOPER, LICENCE_FILE, Plan, apply, plan_in
+from ._policy_document import load_document, load_file
+from .audit import utc_now
 from .errors import ConfigError
-from .policy import Recall
+from .policy import Policy, Recall
 
 # What the first call of any session remembers.
 _FRESH = Recall(now=0.0, footprints=frozenset(), calls=())
@@ -49,6 +52,8 @@ _OPERATORS = ";&|<>()"
 _GUARD_OPTIONS = frozenset({"--dir", "--agent"})
 # The log, the stop file and a licence key are this machine's, never the
 # repository's: a key committed to a public repository is anyone's (D62).
+# At most this many agent names from a policy file go into a refusal.
+_LISTED = 5
 _IGNORED = "audit.jsonl\naudit.jsonl.anchor\nstop\nlicence.key\n"
 
 
@@ -74,6 +79,7 @@ def init(  # noqa: PLR0913 - keyword-only; the files and the process runner are 
     run: Callable[[Sequence[str], Path], tuple[int, str]],
     out: TextIO,
     global_files: Sequence[Path] = (),
+    now: Callable[[], datetime] = utc_now,
 ) -> int:
     """Set ``project`` up for the guard, then prove it works. Safe to run twice.
 
@@ -81,6 +87,13 @@ def init(  # noqa: PLR0913 - keyword-only; the files and the process runner are 
     there), ``.paveo/.gitignore``, and the hook in the agent's folder, naming
     this machine's ``paveo`` by its full path. ``hook_files`` are every file the
     agent reads hooks from, so a paveo hook in any of them is found.
+
+    **One policy for every agent in the project** (D88). A policy already there
+    that does not name this agent gets the agent's starter rules added, so
+    Claude Code, Codex and Cursor in one project follow one file. Before, the
+    second agent's init kept a policy that named only the first, and every call
+    from the second was refused as an unknown agent. If the plan's number of
+    agents would leave the new one refused, init says so and writes nothing.
 
     **It never says the seatbelt is on without having checked** (/code-review,
     D50): the hook must reach every tool the policy governs, the self-test must
@@ -99,31 +112,37 @@ def init(  # noqa: PLR0913 - keyword-only; the files and the process runner are 
     home, folder = project / ".paveo", project / harness.folder
     target = folder / harness.hook_file
     refusal = _cannot_start(
-        harness, program=program, folder=folder, global_files=global_files
+        harness,
+        program=program,
+        folder=folder,
+        global_files=global_files,
+        touched=(
+            home,
+            home / POLICY,
+            home / ".gitignore",
+            home / LICENCE_FILE,
+            target,
+            folder / ".gitignore",
+        ),
     )
     if refusal is not None:
         out.write(f"FAIL {refusal}\n")
         return 1
-    links = [
-        path
-        for path in (
-            home,
-            home / POLICY,
-            home / ".gitignore",
-            folder,
-            target,
-            folder / ".gitignore",
-        )
-        if path.is_symlink()
-    ]
-    if links:
-        out.write(
-            f"FAIL {links[0]} is a symbolic link. init writes only real files "
-            f"inside the project, so nothing was changed.\n"
-        )
-        return 1
     plan = _plan_hook(harness, target, hook_files, out)
     if plan is None:
+        return 1
+    today = now().date()
+    try:
+        # A key is read only when a policy is already there to judge against:
+        # the starter names one agent, which every plan covers.
+        licence = plan_in(home, today=today) if (home / POLICY).exists() else DEVELOPER
+        addition = _agent_addition(
+            harness, home / POLICY, plan.agents, licence, today=today
+        )
+    except ConfigError as e:
+        addition = _Refusal(f"{e} Nothing was changed.")
+    if isinstance(addition, _Refusal):
+        out.write(f"FAIL {addition.why}\n")
         return 1
     try:
         _write_files(
@@ -134,6 +153,7 @@ def init(  # noqa: PLR0913 - keyword-only; the files and the process runner are 
             plan=plan,
             program=program,
             out=out,
+            addition=addition,
         )
     except OSError as e:
         out.write(f"FAIL could not write the setup ({type(e).__name__}: {e})\n")
@@ -150,7 +170,9 @@ def init(  # noqa: PLR0913 - keyword-only; the files and the process runner are 
         global_files=global_files,
         program=str(program),
     )
-    weakness = _policy_weakness(harness, home / POLICY, plan.agents)
+    weakness = _policy_weakness(
+        harness, home / POLICY, plan.agents, licence, today=today
+    )
     if weakness is not None:
         out.write(f"FAIL {home / POLICY} {weakness}\n")
         return 1
@@ -163,9 +185,16 @@ def init(  # noqa: PLR0913 - keyword-only; the files and the process runner are 
 
 
 def _cannot_start(
-    harness: Harness, *, program: Path, folder: Path, global_files: Sequence[Path]
+    harness: Harness,
+    *,
+    program: Path,
+    folder: Path,
+    global_files: Sequence[Path],
+    touched: Sequence[Path],
 ) -> str | None:
-    """Why init must not start here or with this program, or ``None``."""
+    """Why init must not start here or with this program, or ``None``.
+    ``touched`` are the files and folders it would write or read: none may be a
+    link, so a cloned repository cannot point one at another file."""
     if any(_same_place(folder, each.parent) for each in global_files):
         return (
             f"{folder} is where {harness.name} keeps the settings it reads in "
@@ -177,6 +206,12 @@ def _cannot_start(
         return (
             f"run this through the installed `paveo` command, so the hook can name "
             f"it: e.g. /path/to/venv/bin/paveo init {harness.name}"
+        )
+    links = [path for path in (folder, *touched) if path.is_symlink()]
+    if links:
+        return (
+            f"{links[0]} is a symbolic link. init writes only real files inside "
+            f"the project, so nothing was changed."
         )
     return None
 
@@ -282,6 +317,117 @@ def _hooks_for(
     return found
 
 
+@dataclass(frozen=True)
+class _Refusal:
+    """Why init must stop before writing anything."""
+
+    why: str
+
+
+def _agent_addition(
+    harness: Harness,
+    policy: Path,
+    agents: frozenset[str],
+    licence: Plan,
+    *,
+    today: date,
+) -> str | _Refusal | None:
+    """The policy's new text with this agent's starter rules added, ``None`` if
+    nothing is to be added, or why init must stop. **Decided before anything is
+    written** (/code-review, D88), on the policy as the guard will load it.
+
+    A policy already there is loaded with ``load_file``, so its size limit and
+    validation apply before a cloned repository's file is parsed here; one that
+    does not load, fails open, or would leave an agent a hook judges as unnamed
+    or past the plan, stops init with nothing changed. Only an agent a hook will
+    judge calls as by the agent's own name is added.
+    """
+    if not policy.exists():
+        return None
+    loaded = _judged_before_writing(harness, policy, agents, licence, today=today)
+    if isinstance(loaded, _Refusal):
+        return loaded
+    if harness.name not in agents or harness.name in loaded.agents:
+        return None
+    return _merged(harness, policy, loaded, licence)
+
+
+def _judged_before_writing(
+    harness: Harness,
+    policy: Path,
+    agents: frozenset[str],
+    licence: Plan,
+    *,
+    today: date,
+) -> Policy | _Refusal:
+    """The policy as the guard will load it, or why init must not go on."""
+    try:
+        loaded = apply(load_file(policy), licence, today=today)
+    except ConfigError as e:
+        return _Refusal(
+            f"{policy} does not load ({e}). Nothing was changed: fix it, or remove "
+            f"it and run init again for the starter policy."
+        )
+    if loaded.fail_open:
+        return _Refusal(
+            f"{policy} sets defaults.fail_open, so a call whose decision cannot be "
+            f"recorded is let through. init will not call that a seatbelt; "
+            f"nothing was changed."
+        )
+    for agent in sorted(agents):
+        if agent not in loaded.agents and agent != harness.name:
+            return _Refusal(
+                f"{policy} names no agent {agent!r}, which a paveo hook here judges "
+                f"calls as, so every such call would be refused. Nothing was changed."
+            )
+        if agent in loaded.over_plan:
+            return _Refusal(_past_plan(policy, loaded.agents, licence, harness))
+    return loaded
+
+
+def _merged(
+    harness: Harness, policy: Path, loaded: Policy, licence: Plan
+) -> str | _Refusal:
+    """``policy`` with the agent's starter rules appended, validated whole."""
+    starter = json.loads(
+        resources.files("paveo")
+        .joinpath("starters", f"{harness.name}.json")
+        .read_text(encoding="utf-8")
+    )
+    added = starter["agents"]
+    if licence.agents is not None and len(loaded.agents) + len(added) > licence.agents:
+        return _Refusal(_past_plan(policy, loaded.agents, licence, harness))
+    # load_file has refused anything over its size limit or not valid, so this
+    # second read parses the same small document; the merged text is validated
+    # whole, so what is written is a policy that loads.
+    document = json.loads(policy.read_text(encoding="utf-8"))
+    document["agents"] = [*document["agents"], *added]
+    text = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
+    try:
+        load_document(json.loads(text), source=str(policy))
+    except ConfigError as e:
+        return _Refusal(
+            f"{policy} with {harness.title}'s starter rules added does not load "
+            f"({e}). Nothing was changed."
+        )
+    return text
+
+
+def _past_plan(
+    policy: Path, names: Mapping[str, object], licence: Plan, harness: Harness
+) -> str:
+    """The refusal for an agent the plan would leave refused every call. Names
+    come from the file, so they are quoted and only the first few listed."""
+    listed = ", ".join(repr(name) for name in list(names)[:_LISTED])
+    more = "" if len(names) <= _LISTED else f" and {len(names) - _LISTED} more"
+    return (
+        f"{policy} names {len(names)} agent(s) ({listed}{more}), and the "
+        f"{licence.name} plan covers {licence.agents} per policy, so "
+        f"{harness.title} would have every call refused. Nothing was changed. A "
+        f"paid plan covers more agents (https://paveo.dev/#pricing)."
+    )
+
+
 def _read_settings(path: Path, out: TextIO) -> dict[str, object] | None:
     """A hook file as a dict, ``{}`` if absent, ``None`` (said why) if it
     cannot be read: rewriting what could not be read would drop settings."""
@@ -310,10 +456,17 @@ def _write_files(  # noqa: PLR0913 - one call, each path a different file it wri
     plan: _HookPlan,
     program: Path,
     out: TextIO,
+    addition: str | None = None,
 ) -> None:
     home.mkdir(mode=0o700, exist_ok=True)
     policy = home / POLICY
-    if policy.exists():
+    if addition is not None:
+        _replace(policy, addition)
+        out.write(
+            f"added     {harness.name!r} to {policy}, with its starter rules: one "
+            f"policy now covers every agent in this project\n"
+        )
+    elif policy.exists():
         out.write(f"kept      {policy} (already there)\n")
     else:
         starter = resources.files("paveo").joinpath("starters", f"{harness.name}.json")
@@ -407,19 +560,36 @@ def _replace(target: Path, text: str) -> None:
 
 
 def _policy_weakness(
-    harness: Harness, policy: Path, agents: frozenset[str]
+    harness: Harness,
+    policy: Path,
+    agents: frozenset[str],
+    licence: Plan,
+    *,
+    today: date,
 ) -> str | None:
     """Why this policy would not do what init is about to promise, or ``None``.
 
     A policy already in the project was kept unread, and a cloned repository can
     ship a permissive one (/code-review, D50), so it is asked, not trusted: as
-    every agent a hook will judge calls as.
+    every agent a hook will judge calls as. **An agent it does not name, or one
+    past the plan's number, fails too**: either is refused every call, which the
+    probes alone would read as a policy that refuses what it should (D88).
     """
     try:
-        loaded = load_file(policy)
+        loaded = apply(load_file(policy), licence, today=today)
     except ConfigError as e:
         return f"does not load: {e}"
     for agent in sorted(agents):
+        if agent not in loaded.agents:
+            return (
+                f"names no agent {agent!r}, so {harness.title} would have every "
+                f"call refused. Add it, or remove this file and run init again."
+            )
+        if agent in loaded.over_plan:
+            return (
+                f"names {agent!r} past the {licence.name} plan's {licence.agents} "
+                f"agents, so {harness.title} would have every call refused."
+            )
         if loaded.shadows(agent):
             return (
                 f"is in shadow mode for {agent!r}, so it records refusals and "

@@ -15,14 +15,16 @@ from __future__ import annotations
 import io
 import json
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from datetime import date
 from pathlib import Path
 
 import pytest
 
 from conftest import make_clock
-from paveo._harnesses import CODEX, CURSOR, Harness, _patch_paths
-from paveo._setup import NOT_A_CALL, init, run_hook, selftest
+from paveo._harnesses import CLAUDE_CODE, CODEX, CURSOR, Harness, _patch_paths
+from paveo._licence import DEVELOPER
+from paveo._setup import NOT_A_CALL, _policy_weakness, init, run_hook, selftest
 from paveo.cli import guard
 from test_cli import paveo_shim
 
@@ -333,6 +335,220 @@ def test_init_refuses_a_matcher_that_misses_apply_patch(tmp_path: Path) -> None:
 
     assert code == 1
     assert "never reach it" in out
+
+
+# --------------------------------------------------------------------------
+# One policy for every agent in a project (D88)
+# --------------------------------------------------------------------------
+
+
+def agent_ids(project: Path) -> list[str]:
+    policy = json.loads((project / ".paveo" / "policy.json").read_text("utf-8"))
+    return [agent["id"] for agent in policy["agents"]]
+
+
+def test_init_for_a_second_agent_adds_it_to_the_policy_already_there(
+    tmp_path: Path,
+) -> None:
+    """Before D88 the second init kept a policy naming only the first agent, and
+    every call from the second was refused as unknown (/code-review, 11 Oct)."""
+    project = tmp_path / "project"
+    project.mkdir()
+    shim = paveo_shim(tmp_path / "bin")
+    assert run_init(CLAUDE_CODE, project, shim)[0] == 0
+
+    code, out = run_init(CURSOR, project, shim)
+
+    assert code == 0, out
+    assert "added     'cursor'" in out
+    assert agent_ids(project) == ["claude-code", "cursor"]
+    home = project / ".paveo"
+    assert decide(home, CURSOR, shell("rm -rf src"))[0] == 2
+    assert decide(home, CURSOR, shell("git status"))[0] == 0
+    claude = {"session_id": "s1", "tool_name": "Bash"}
+    assert (
+        decide(home, CLAUDE_CODE, {**claude, "tool_input": {"command": "rm -rf src"}})[
+            0
+        ]
+        == 2
+    )
+    assert (
+        decide(home, CLAUDE_CODE, {**claude, "tool_input": {"command": "ls"}})[0] == 0
+    )
+
+
+def test_init_for_the_same_agent_again_keeps_the_policy_as_it_is(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    shim = paveo_shim(tmp_path / "bin")
+    assert run_init(CODEX, project, shim)[0] == 0
+    before = (project / ".paveo" / "policy.json").read_text("utf-8")
+
+    code, out = run_init(CODEX, project, shim)
+
+    assert code == 0, out
+    assert "added     'codex'" not in out
+    assert (project / ".paveo" / "policy.json").read_text("utf-8") == before
+
+
+def test_init_refuses_an_agent_the_free_plan_would_refuse_and_changes_nothing(
+    tmp_path: Path,
+) -> None:
+    """Developer covers two agents per policy: a third would be refused every
+    call as plan_limit, which the probes alone would pass as a strict policy."""
+    project = tmp_path / "project"
+    project.mkdir()
+    shim = paveo_shim(tmp_path / "bin")
+    assert run_init(CLAUDE_CODE, project, shim)[0] == 0
+    assert run_init(CURSOR, project, shim)[0] == 0
+    before = (project / ".paveo" / "policy.json").read_text("utf-8")
+
+    code, out = run_init(CODEX, project, shim)
+
+    assert code == 1
+    assert "covers 2 per policy" in out
+    assert "Nothing was changed" in out
+    assert (project / ".paveo" / "policy.json").read_text("utf-8") == before
+    assert not (project / ".codex").exists()
+
+
+def test_the_policy_check_fails_an_agent_the_policy_does_not_name(
+    tmp_path: Path,
+) -> None:
+    """A kept hook can judge calls as an agent the policy lacks: every call is
+    then refused as unknown, and init must not call that a working seatbelt."""
+    home = seatbelt(tmp_path, CLAUDE_CODE)
+
+    weakness = _policy_weakness(
+        CURSOR,
+        home / "policy.json",
+        frozenset({"cursor"}),
+        DEVELOPER,
+        today=date(2026, 10, 12),
+    )
+
+    assert weakness is not None
+    assert "names no agent 'cursor'" in weakness
+
+
+def test_the_policy_check_fails_an_agent_past_the_plan(tmp_path: Path) -> None:
+    home = tmp_path / ".paveo"
+    home.mkdir()
+    agents = [
+        json.loads((STARTERS / f"{name}.json").read_text("utf-8"))["agents"][0]
+        for name in ("claude-code", "codex", "cursor")
+    ]
+    (home / "policy.json").write_text(
+        json.dumps({"version": 1, "policy_id": "three", "agents": agents}), "utf-8"
+    )
+
+    weakness = _policy_weakness(
+        CURSOR,
+        home / "policy.json",
+        frozenset({"cursor"}),
+        DEVELOPER,
+        today=date(2026, 10, 12),
+    )
+
+    assert weakness is not None
+    assert "past the developer plan's 2 agents" in weakness
+
+
+def claude_project(tmp_path: Path) -> tuple[Path, Path]:
+    """A project set up for Claude Code, and the paveo that set it up."""
+    project = tmp_path / "project"
+    project.mkdir()
+    shim = paveo_shim(tmp_path / "bin")
+    assert run_init(CLAUDE_CODE, project, shim)[0] == 0
+    return project, shim
+
+
+def edit_policy(project: Path, change: Callable[[dict[str, object]], None]) -> str:
+    path = project / ".paveo" / "policy.json"
+    document = json.loads(path.read_text("utf-8"))
+    change(document)
+    path.write_text(json.dumps(document), "utf-8")
+    return path.read_text("utf-8")
+
+
+def assert_nothing_changed(project: Path, before: str) -> None:
+    assert (project / ".paveo" / "policy.json").read_text("utf-8") == before
+    assert not (project / ".cursor").exists()
+
+
+def test_init_refuses_to_merge_into_a_policy_that_does_not_load(tmp_path: Path) -> None:
+    """Before the fix the merge rewrote the file and wrote the hook, then failed
+    (/code-review, D88): a failing run must change nothing."""
+    project, shim = claude_project(tmp_path)
+    before = edit_policy(project, lambda d: d.update(version=99))
+
+    code, out = run_init(CURSOR, project, shim)
+
+    assert code == 1
+    assert "does not load" in out
+    assert_nothing_changed(project, before)
+
+
+def test_init_refuses_to_add_an_agent_to_a_policy_that_fails_open(
+    tmp_path: Path,
+) -> None:
+    project, shim = claude_project(tmp_path)
+    before = edit_policy(project, lambda d: d.update(defaults={"fail_open": True}))
+
+    code, out = run_init(CURSOR, project, shim)
+
+    assert code == 1
+    assert "fail_open" in out
+    assert_nothing_changed(project, before)
+
+
+def test_init_refuses_before_writing_when_the_agent_is_already_past_the_plan(
+    tmp_path: Path,
+) -> None:
+    """A cloned policy listing the agent third on the free plan: refused before
+    any hook is written, not after (/code-review, D88)."""
+    project, shim = claude_project(tmp_path)
+    cursor = json.loads((STARTERS / "cursor.json").read_text("utf-8"))["agents"][0]
+    codex_agent = json.loads((STARTERS / "codex.json").read_text("utf-8"))["agents"][0]
+    before = edit_policy(
+        project, lambda d: d.update(agents=[*d["agents"], codex_agent, cursor])
+    )
+
+    code, out = run_init(CURSOR, project, shim)
+
+    assert code == 1
+    assert "covers 2 per policy" in out
+    assert_nothing_changed(project, before)
+
+
+def test_init_refuses_a_licence_key_that_is_a_link(tmp_path: Path) -> None:
+    project, shim = claude_project(tmp_path)
+    (tmp_path / "elsewhere").write_text("not a key", "utf-8")
+    (project / ".paveo" / "licence.key").symlink_to(tmp_path / "elsewhere")
+
+    code, out = run_init(CURSOR, project, shim)
+
+    assert code == 1
+    assert "symbolic link" in out
+    assert not (project / ".cursor").exists()
+
+
+def test_the_merge_keeps_characters_a_person_wrote(tmp_path: Path) -> None:
+    project, shim = claude_project(tmp_path)
+
+    def accent(document: dict[str, object]) -> None:
+        agents = document["agents"]
+        assert isinstance(agents, list)
+        agents[0]["tools"]["allow"][0]["constraints"]["command"]["not_matches"].append(
+            "supprimé"
+        )
+
+    edit_policy(project, accent)
+
+    assert run_init(CURSOR, project, shim)[0] == 0
+    assert "supprimé" in (project / ".paveo" / "policy.json").read_text("utf-8")
 
 
 def codex_project(tmp_path: Path) -> tuple[Path, Path]:

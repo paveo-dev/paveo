@@ -18,12 +18,14 @@ import io
 import json
 import os
 from collections.abc import Callable
+from datetime import date
 from pathlib import Path
 
 import pytest
 
 from conftest import make_clock, records_in
 from paveo._harnesses import CLAUDE_CODE, CODEX, CURSOR, Harness
+from paveo._licence import DEVELOPER
 from paveo._setup import _policy_weakness
 from paveo.cli import guard
 from test_other_agents import codex, patch, pre_tool, seatbelt
@@ -416,7 +418,13 @@ def test_init_flags_a_policy_that_refuses_only_the_written_name(
     misses the absolute path the guard now also judges, so init says so."""
     home = project_with_guard(tmp_path)
     assert (
-        _policy_weakness(CLAUDE_CODE, home / "policy.json", frozenset({"claude-code"}))
+        _policy_weakness(
+            CLAUDE_CODE,
+            home / "policy.json",
+            frozenset({"claude-code"}),
+            DEVELOPER,
+            today=date(2026, 10, 12),
+        )
         is None
     )
 
@@ -427,7 +435,11 @@ def test_init_flags_a_policy_that_refuses_only_the_written_name(
     (home / "policy.json").write_text(json.dumps(starter), "utf-8")
 
     weakness = _policy_weakness(
-        CLAUDE_CODE, home / "policy.json", frozenset({"claude-code"})
+        CLAUDE_CODE,
+        home / "policy.json",
+        frozenset({"claude-code"}),
+        DEVELOPER,
+        today=date(2026, 10, 12),
     )
     assert weakness is not None
     assert "an edit to it" in weakness
