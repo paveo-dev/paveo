@@ -467,7 +467,7 @@ plan covers.
 
 **Coding agents across a company are priced per developer**, since each
 engineer's Claude Code, Codex or Cursor guard is one agent and would otherwise
-never leave the free plan: $15 per developer a month, minimum 5. One developer
+never leave the free plan: $15 per developer a month, no minimum. One developer
 guarding their own machine stays on Developer, free. The company's key adds audit
 evidence from each developer's log, email support, and an hour with us writing the
 policy you roll out to everyone.
