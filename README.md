@@ -1,6 +1,6 @@
 # Paveo
 
-**Rules for every AI coding agent your team runs.**
+**One set of rules for every AI coding agent your team runs.**
 
 Claude Code, Codex and Cursor ask Paveo before they run a shell command or
 write a file. `rm -rf`, `git push --force`, `DROP TABLE` and the obvious ways of
