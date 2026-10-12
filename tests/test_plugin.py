@@ -170,7 +170,14 @@ def managed_install(tmp_path: Path, *, owner: str = OWNER) -> Path:
     script = (ROLLOUT / "guard").read_text("utf-8")
     assert script.count("! -user root") == 1
     accepted = "-user root" if owner == "root" else f"( -user root -o -user {owner} )"
-    (opt / "guard").write_text(script.replace("-user root", accepted), "utf-8")
+    script = script.replace("-user root", accepted)
+    # The walk above /opt/paveo stops at tmp_path, the test's own root: above
+    # it, Linux keeps /tmp world-writable by design, which the shipped script
+    # rightly refuses for a real install.
+    walk = 'while [ "$folder" != / ]; do'
+    assert script.count(walk) == 1
+    script = script.replace(walk, f'while [ "$folder" != "{opt.parent.parent}" ]; do')
+    (opt / "guard").write_text(script, "utf-8")
     shutil.copy2(ROLLOUT / "policy.json", opt / "policy.json")
     python = opt / "python"
     (python / "lib" / "python3.12").mkdir(parents=True)
