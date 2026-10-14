@@ -24,7 +24,9 @@ pip install paveo            # Python 3.11+ (python3 --version), macOS or Linux
 
 **For a whole team:** the hook, one policy, a standalone Python and paveo, all
 inside a root-owned `/opt/paveo`, for Claude Code and Codex on every engineer's
-machine and set in each agent's managed settings; on every call the hook checks
+machine and set in each agent's managed settings (in the one managed source you
+already deploy: a second source can make Claude Code skip it, see the guide); on
+every call the hook checks
 that everything in `/opt/paveo` is root's, file by file, so the agent cannot
 switch it off through any file the hook runs (it can still edit what the
 engineer's shell starts with, such as `~/.zshrc`: the guide says what is not

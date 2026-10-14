@@ -73,11 +73,19 @@ covers, and a signed one cannot be made up.
 
 ### 2. Point each agent at it
 
-**Claude Code.** Merge `rollout/claude-code-managed-settings.json` into your
-managed settings: `/Library/Application Support/ClaudeCode/managed-settings.json`
-on macOS, `/etc/claude-code/managed-settings.json` on Linux, or the claude.ai
-admin console. Managed hooks run in every project, and only managed settings can
-turn them off. To stop people adding hooks of their own as well, add
+**Claude Code.** Merge `rollout/claude-code-managed-settings.json` into the
+**one managed source you already deploy**: the claude.ai admin console, an MDM
+profile, or the file `/Library/Application Support/ClaudeCode/managed-settings.json`
+on macOS and `/etc/claude-code/managed-settings.json` on Linux. They are not
+interchangeable. By default Claude Code reads only the highest-ranked source
+that delivers any policy, console first, then MDM, then the file, and skips the
+rest without a warning: a hook placed in the file on a machine that also gets a
+console or MDM policy never loads. To apply every source instead, set
+`managedSourcesBehavior` to `"merge"` (Claude Code 2.1.242 or later). Source:
+Anthropic's managed settings documentation, "How Claude Code combines managed
+sources", read 13 Oct 2026 (https://code.claude.com/docs/en/managed-settings).
+Managed hooks run in every project, and only managed settings can turn them off.
+To stop people adding hooks of their own as well, add
 `"allowManagedHooksOnly": true`.
 
 **Codex.** Add `rollout/codex-requirements.toml` to Codex's managed
@@ -95,6 +103,12 @@ echo '{"paveo_selftest": true}' | /bin/sh /opt/paveo/guard claude-code; echo "ex
 A working hook refuses this test call with `exit 2` and a message saying the
 input "is not a tool call this guard reads": it started, loaded the policy and
 opened the log. Any other result names what is wrong. Repeat with `codex`.
+
+That proves the hook works, not that Claude Code runs it. Then start a Claude
+Code session on the same machine and run `/status`: it names the managed source
+Claude Code used and the ones it skipped, and the source holding the hook must
+be the one used. Last, ask the agent to run `rm -rf ./paveo-check` and see it
+refused.
 
 ### Each person's log, the panic button and evidence
 
