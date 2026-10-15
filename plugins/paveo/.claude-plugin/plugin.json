@@ -9,7 +9,7 @@
   },
   "homepage": "https://paveo.dev",
   "repository": "https://github.com/paveo-dev/paveo",
-  "license": "Elastic-2.0",
+  "license": "Apache-2.0",
   "keywords": [
     "security",
     "guardrails",

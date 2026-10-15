@@ -393,24 +393,43 @@ def test_init_for_the_same_agent_again_keeps_the_policy_as_it_is(
     assert (project / ".paveo" / "policy.json").read_text("utf-8") == before
 
 
-def test_init_refuses_an_agent_the_free_plan_would_refuse_and_changes_nothing(
+def test_one_developer_runs_all_three_agents_on_the_free_plan(
     tmp_path: Path,
 ) -> None:
-    """Developer covers two agents per policy: a third would be refused every
-    call as plan_limit, which the probes alone would pass as a strict policy."""
+    """Until D94 the free plan covered two agents, so a third `init` was refused
+    and one developer could not try Claude Code, Cursor and Codex together."""
     project = tmp_path / "project"
     project.mkdir()
     shim = paveo_shim(tmp_path / "bin")
     assert run_init(CLAUDE_CODE, project, shim)[0] == 0
     assert run_init(CURSOR, project, shim)[0] == 0
-    before = (project / ".paveo" / "policy.json").read_text("utf-8")
+
+    code, out = run_init(CODEX, project, shim)
+
+    assert code == 0, out
+    agents = json.loads((project / ".paveo" / "policy.json").read_text("utf-8"))
+    assert [a["id"] for a in agents["agents"]] == ["claude-code", "cursor", "codex"]
+
+
+def test_init_refuses_to_add_an_agent_past_the_free_plan_and_changes_nothing(
+    tmp_path: Path,
+) -> None:
+    """The append path: a policy already at the plan's number, and init for one
+    more. Refused before anything is written (D94 kept this when it raised the
+    number; /code-review found the first rewrite had dropped it)."""
+    project, shim = claude_project(tmp_path)
+    free = DEVELOPER.agents
+    assert free is not None
+    claude = json.loads((STARTERS / "claude-code.json").read_text("utf-8"))["agents"][0]
+    fillers = [{**claude, "id": f"other-{n}"} for n in range(free - 1)]
+    before = edit_policy(project, lambda d: d.update(agents=[*d["agents"], *fillers]))
 
     code, out = run_init(CODEX, project, shim)
 
     assert code == 1
-    assert "covers 2 per policy" in out
+    assert f"covers {free} per policy" in out
     assert "Nothing was changed" in out
-    assert (project / ".paveo" / "policy.json").read_text("utf-8") == before
+    assert_nothing_changed(project, before)
     assert not (project / ".codex").exists()
 
 
@@ -436,12 +455,13 @@ def test_the_policy_check_fails_an_agent_the_policy_does_not_name(
 def test_the_policy_check_fails_an_agent_past_the_plan(tmp_path: Path) -> None:
     home = tmp_path / ".paveo"
     home.mkdir()
-    agents = [
-        json.loads((STARTERS / f"{name}.json").read_text("utf-8"))["agents"][0]
-        for name in ("claude-code", "codex", "cursor")
-    ]
+    cursor = json.loads((STARTERS / "cursor.json").read_text("utf-8"))["agents"][0]
+    free = DEVELOPER.agents
+    assert free is not None
+    others = [{**cursor, "id": f"other-{n}"} for n in range(free)]
     (home / "policy.json").write_text(
-        json.dumps({"version": 1, "policy_id": "three", "agents": agents}), "utf-8"
+        json.dumps({"version": 1, "policy_id": "full", "agents": [*others, cursor]}),
+        "utf-8",
     )
 
     weakness = _policy_weakness(
@@ -453,7 +473,7 @@ def test_the_policy_check_fails_an_agent_past_the_plan(tmp_path: Path) -> None:
     )
 
     assert weakness is not None
-    assert "past the developer plan's 2 agents" in weakness
+    assert f"past the developer plan's {free} agents" in weakness
 
 
 def claude_project(tmp_path: Path) -> tuple[Path, Path]:
@@ -507,19 +527,24 @@ def test_init_refuses_to_add_an_agent_to_a_policy_that_fails_open(
 def test_init_refuses_before_writing_when_the_agent_is_already_past_the_plan(
     tmp_path: Path,
 ) -> None:
-    """A cloned policy listing the agent third on the free plan: refused before
-    any hook is written, not after (/code-review, D88)."""
+    """A cloned policy listing the agent past the free plan's number: refused
+    before any hook is written, not after (/code-review, D88)."""
     project, shim = claude_project(tmp_path)
     cursor = json.loads((STARTERS / "cursor.json").read_text("utf-8"))["agents"][0]
     codex_agent = json.loads((STARTERS / "codex.json").read_text("utf-8"))["agents"][0]
+    free = DEVELOPER.agents
+    assert free is not None
+    # claude-code and codex, then others up to the plan's number, then cursor.
+    fillers = [{**codex_agent, "id": f"other-{n}"} for n in range(free - 2)]
     before = edit_policy(
-        project, lambda d: d.update(agents=[*d["agents"], codex_agent, cursor])
+        project,
+        lambda d: d.update(agents=[*d["agents"], codex_agent, *fillers, cursor]),
     )
 
     code, out = run_init(CURSOR, project, shim)
 
     assert code == 1
-    assert "covers 2 per policy" in out
+    assert f"covers {free} per policy" in out
     assert_nothing_changed(project, before)
 
 

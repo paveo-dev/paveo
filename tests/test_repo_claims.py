@@ -12,6 +12,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -24,31 +26,72 @@ ROOT = Path(__file__).parent.parent
 # raw.githubusercontent.com/elastic/elasticsearch/main/licenses/ELASTIC-LICENSE-2.0.txt
 # The copyright header above it is ours; everything from the title down is not.
 ELASTIC_2_0_SHA256 = "48255018b41fc0e965b1115af7e6779bc218bb8a6747d561da800d5022622aa2"
+ELASTIC_TITLE = b"Elastic License 2.0\n"
+# sha256 of the Apache License 2.0 text from its title down, fetched 2026-10-15
+# from www.apache.org/licenses/LICENSE-2.0.txt (D95).
+APACHE_2_0_SHA256 = "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+APACHE_TITLE = b"                                 Apache License\n"
+LICENSOR = b"Copyright (c) 2026 MD Faiz Jamal\n"
+ELASTIC_SPDX = "SPDX-License-Identifier: Elastic-2.0"
 
-LICENCE_TITLE = b"Elastic License 2.0\n"
 
-
-def test_the_licence_text_is_canonical_elastic_2_0() -> None:
+def _canonical_body(name: str, title: bytes, digest: str) -> None:
     """A reworded licence clause is a legal defect no other check would catch.
 
-    D22 commits to shipping ELv2 *unmodified*; ELv2 itself forbids altering the
-    licensor's notices. This pins the body so an accidental edit — a reflow, an
-    editor stripping trailing whitespace, a well-meaning tidy-up — fails here.
+    Both licences are shipped *unmodified*, and both carry notices a licensee
+    must keep. This pins each body so an accidental edit, a reflow, an editor
+    stripping trailing whitespace or a well-meaning tidy-up, fails here.
     """
-    raw = (ROOT / "LICENSE").read_bytes()
-
-    assert raw.startswith(b"Copyright (c) 2026 MD Faiz Jamal\n"), (
-        "LICENSE must name the licensor: ELv2's notice-preservation clause is "
-        "meaningless if the repo carries no notices to preserve"
+    raw = (ROOT / name).read_bytes()
+    assert raw.startswith(LICENSOR), f"{name} must name the licensor"
+    assert raw.count(title) == 1, f"{name}: the licence title must appear once"
+    body = raw[raw.index(title) :]
+    assert hashlib.sha256(body).hexdigest() == digest, (
+        f"{name} is not the canonical licence text. Do not update this hash to "
+        "make the test pass: restore the text, or record a deliberate relicensing "
+        "decision first."
     )
-    assert raw.count(LICENCE_TITLE) == 1, "licence title must appear exactly once"
 
-    body = raw[raw.index(LICENCE_TITLE) :]
-    assert hashlib.sha256(body).hexdigest() == ELASTIC_2_0_SHA256, (
-        "LICENSE body is not canonical Elastic License 2.0. Do not update this "
-        "hash to make the test pass — restore the text, or record the change in "
-        "the decision record as a deliberate relicensing decision first."
+
+def test_the_licence_is_canonical_apache_2_0() -> None:
+    _canonical_body("LICENSE", APACHE_TITLE, APACHE_2_0_SHA256)
+
+
+def test_the_paid_files_licence_is_canonical_elastic_2_0() -> None:
+    _canonical_body("LICENSE-ELASTIC", ELASTIC_TITLE, ELASTIC_2_0_SHA256)
+
+
+def test_the_elastic_files_are_exactly_the_ones_listed() -> None:
+    """LICENSE-ELASTIC names its files; each carries the SPDX line, and no other
+    file does. A paid file added without both, or one listed that went back to
+    Apache, would leave a reader unable to tell which terms apply (D95)."""
+    raw = (ROOT / "LICENSE-ELASTIC").read_text("utf-8")
+    preamble = raw[: raw.index(ELASTIC_TITLE.decode())]
+    listed = {line.strip() for line in preamble.splitlines() if line.startswith("    ")}
+    marked = {
+        path.relative_to(ROOT).as_posix()
+        for tree in ("src", "tools", "rollout", "plugins")
+        for path in (ROOT / tree).rglob("*")
+        if path.is_file()
+        and path.suffix in {".py", ".sh", ""}
+        and ELASTIC_SPDX in path.read_text("utf-8", errors="replace")[:400]
+    }
+    assert listed == marked == {"src/paveo/_evidence.py"}
+
+
+def test_the_free_core_never_loads_the_elastic_file() -> None:
+    """A company declined Paveo because licence-keyed, non-OSI code would sit
+    in their guard path (D95). Importing the CLI, which holds the
+    guard, doctor, init and every free command, must not load ``_evidence``."""
+    script = "import sys, paveo, paveo.cli\nprint('paveo._evidence' in sys.modules)\n"
+    result = subprocess.run(  # noqa: S603 - our own interpreter and our own script
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=True,
+        env={"PYTHONPATH": str(ROOT / "src")},
     )
+    assert result.stdout.strip() == "False"
 
 
 def test_the_readme_does_not_claim_what_is_not_built() -> None:

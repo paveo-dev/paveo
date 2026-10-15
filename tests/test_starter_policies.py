@@ -54,6 +54,66 @@ def bash(command: str) -> dict[str, object]:
         "git push -f",
         "git reset --hard HEAD~3",
         "git clean -fdx",
+        # git's own options before the verb, and a `+` refspec, which also
+        # forces: each got past the first patterns (r/ClaudeCode, 15 Oct; D92).
+        "git -C . push --force origin main",
+        "git -C /srv/repo push -f",
+        "git -c push.default=current push --force",
+        "git --no-pager push --force",
+        "git push origin +main",
+        "git push origin main --force-with-lease",
+        "git -C . reset --hard HEAD~1",
+        "git -C sub clean -fdx",
+        # What /code-review found past the first D92 patterns: a long -C path,
+        # short flags combined or late, --hard and -f after other arguments.
+        "git -C /home/user/projects/acme-corporation/monorepo/services/payments-api"
+        " push --force origin main",
+        "git -C /home/user/projects/acme-corporation/monorepo/services/payments-api"
+        " reset --hard HEAD~3",
+        "git push -fu origin main",
+        "git push origin main -fq",
+        "git reset HEAD~3 --hard",
+        "git reset -q --hard",
+        "git clean -d -f",
+        "git -C . reset HEAD~3 --hard",
+        "git -C . clean -d -f",
+        "git -C . push origin main " + "x" * 70 + " --force",
+        # Second review: a redirect or a quoted push option before the flag, a
+        # `+` after git's options, a quoted or escaped flag, a path past 120.
+        "git push origin main 2>&1 --force",
+        "git push -o 'ci;skip' --force origin main",
+        "git -C . push origin +main",
+        "git --no-pager push origin +main",
+        "git push origin main '-f'",
+        "git push origin main \\-f",
+        "git clean '-fdx'",
+        "git -C /home/user/" + "deeply-nested-directory/" * 6 + "api push --force",
+        # Third review: any one to three tokens of git's own options, a quoted
+        # `+`, a digit or a long cluster before the f.
+        "git -P push --force",
+        "git -p push -f",
+        "git -P reset --hard",
+        "git --no-pager -C . push --force",
+        "git --work-tree /x reset --hard",
+        "git -c 'user.name=A B' push --force",
+        "git --git-dir /tmp/repo push --force",
+        "git push origin '+main'",
+        'git push origin "+main"',
+        "git push -o 'ci;skip' origin +main",
+        "git push -vvvvvvvvvvvf origin main",
+        "git push -4f origin main",
+        "git clean -ddddddddddddf",
+        # Fourth review: padding past a window 0.1.6 never had, an escaped `+`.
+        "git reset" + " " * 120 + "--hard",
+        "git clean" + " " * 120 + "-fdx",
+        "git push origin \\+main",
+        # Fifth review: a redirect or a quoted separator before the flag.
+        "git reset 2>&1 --hard",
+        "git clean 2>&1 -fdx",
+        "git reset &>/dev/null --hard",
+        "git -C . reset 2>&1 --hard",
+        "git -C . push 2>&1 --force",
+        'git reset "a;b" --hard',
         "psql -c 'DROP TABLE users'",
         "truncate table orders",
         "terraform destroy -auto-approve",
@@ -119,6 +179,23 @@ def test_claude_code_refuses_destructive_and_self_disabling_commands(
         "ls -la",
         "rm notes.txt",
         "git push origin feature/x",
+        "git push origin fix-format",
+        "git -C . status",
+        "git commit -m 'fix flaky push test'",
+        "git status && make clean",
+        "git push --follow-tags",
+        "git reset --soft HEAD~1",
+        "git clean -n",
+        "git -c core.fsmonitor=false status",
+        "git --no-pager log --follow notes.txt",
+        "git -C . checkout -b feature",
+        # Short flags with an f that are not force (second review).
+        "git -C . commit -F msg.txt",
+        "git -C . log -Sfetch",
+        "git -C . add -f build/out",
+        "git -C . commit -m 'add -f support'",
+        "git -C . blame -f x",
+        "git push -u origin feature/fix-x",
         "git status && git diff",
         "npm test",
         "python -m pytest -q",
@@ -131,6 +208,30 @@ def test_claude_code_refuses_destructive_and_self_disabling_commands(
 def test_claude_code_permits_ordinary_commands(command: str) -> None:
     policy = starter("claude-code")
     assert policy.evaluate_tool("claude-code", "Bash", bash(command)) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push origin main && echo 'count +1'",
+        "git push origin main && date +%s",
+        "git push && tail -f server.log",
+        "git clean -n && tail -f server.log",
+        "git -C /repo reset HEAD~1 && date +%s",
+        "git -C . stash push && tail -f log",
+        "git -C . reset --soft HEAD~1 && tail -f log",
+        "git -C . clean -n && date +%F",
+        "git -C repo push origin main && docker compose -f x.yml up",
+    ],
+)
+def test_a_flag_later_on_the_line_is_refused_on_purpose(command: str) -> None:
+    """Every git rule reads to the end of the line, so a `+`, an `-f` cluster or
+    `--hard` in the next command is refused too. Kept: each window that stopped at
+    `;`, `&` or `|` let a redirect or a quoted separator through (`git reset 2>&1
+    --hard`, reviews of D92 and D97), and a false refusal fails closed (locked
+    decision #4). Splitting the command into shell words is parked (D97)."""
+    policy = starter("claude-code")
+    assert policy.evaluate_tool("claude-code", "Bash", bash(command)) is not None
 
 
 def test_claude_code_permits_a_bash_call_with_only_the_command() -> None:
@@ -280,6 +381,20 @@ def test_the_file_tools_refuse_everything_they_refused_before() -> None:
     assert all(matched.values()), matched
 
 
+@pytest.mark.parametrize("before", ["git push -", "git -C . push -", "git clean -"])
+def test_a_long_flag_cluster_is_not_slow(before: str) -> None:
+    """`[a-z]*f[a-z]*\\b` took 1.2 s on 16,000 letters and grew fourfold each
+    time they doubled (second /code-review, D92). One star is linear: a cluster
+    with an f matches at once, one without is read once and refused nothing."""
+    import time  # noqa: PLC0415
+
+    policy = starter("claude-code")
+    for letters in ("f" * 200_000 + "1", "a" * 200_000 + "1"):
+        started = time.perf_counter()
+        policy.evaluate_tool("claude-code", "Bash", bash(before + letters))
+        assert time.perf_counter() - started < 1.0, letters[:1]
+
+
 def test_no_starter_pattern_is_slow_on_a_crafted_megabyte() -> None:
     """Claude Code lets a call through when the hook times out, so a pattern made
     slow is a pattern switched off. The first version's `.*` took over a minute
@@ -290,6 +405,15 @@ def test_no_starter_pattern_is_slow_on_a_crafted_megabyte() -> None:
     for filler in (
         "rm ",
         "git push ",
+        "git ",
+        "git -C . ",
+        "git -x push ",
+        "git -x -",
+        "git push -",
+        "git -C x push -",
+        # A flag cluster ending in a digit: `[a-z]*f[a-z]*\b` backtracked on
+        # this quadratically (second review); the cluster is now bounded.
+        "git push -" + "f" * 9 + "1 ",
         "a",
         ".claude/projects/",
         "cd ",
@@ -452,13 +576,29 @@ def shell_refusals(name: str, tool: str) -> list[str]:
     return refusals
 
 
+# The three git rules 0.1.6 published, character for character (D97): every later
+# rule only adds, so nothing a user already had is refused less.
+RULES_0_1_6 = (
+    "\\bgit\\s+" + "push" + "\\b[^\\n]{0,100}(?:--force|\\s-f\\b)",
+    "\\bgit\\s+reset\\s+--hard",
+    "\\bgit\\s+clean\\s+-[a-z]*f",
+)
+
+
+@pytest.mark.parametrize(("name", "tool"), SHELLS)
+def test_the_git_rules_0_1_6_shipped_are_kept_verbatim(name: str, tool: str) -> None:
+    refusals = shell_refusals(name, tool)
+    for rule in RULES_0_1_6:
+        assert rule in refusals, (name, rule)
+
+
 def test_every_agent_refuses_the_same_destructive_commands() -> None:
     """Three copies of one list (a JSON file cannot share one): an edit to one
     that misses the others would leave an agent less guarded (Rule 2)."""
-    destructive = shell_refusals("claude-code", "Bash")[:9]
+    destructive = shell_refusals("claude-code", "Bash")[:15]
     assert destructive[-1] == "\\bmkfs"
     for name, tool in SHELLS:
-        assert shell_refusals(name, tool)[:9] == destructive, name
+        assert shell_refusals(name, tool)[:15] == destructive, name
         assert "\\bpaveo\\s+resume" in shell_refusals(name, tool), name
 
 
@@ -467,6 +607,7 @@ def test_every_agent_refuses_the_same_destructive_commands() -> None:
     [
         "rm -rf build",
         "git " + "push --force origin main",
+        "git -C . " + "push --force origin main",
         "git reset --hard HEAD~3",
         "cat .paveo/audit.jsonl",
         "paveo resume",

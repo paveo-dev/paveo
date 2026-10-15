@@ -99,9 +99,10 @@ from the tests; PyPI keeps a provenance attestation for each file, and the GitHu
 release carries an SBOM written by `.github/sbom.py`.
 
 **Can we read the code?**
-All of it. The licence is the Elastic License 2.0 (`LICENSE`): source-available, not
-open source. You may read, run, modify and embed it; you may not resell Paveo itself
-as a hosted service, or remove its licence-key checks.
+All of it. Paveo is open source under the Apache License 2.0 (`LICENSE`), except
+the paid audit evidence export, `src/paveo/_evidence.py`, which is under the Elastic
+License 2.0 (`LICENSE-ELASTIC`). The guard and every free command never import that
+file, and a test fails if they do (D95).
 
 **How is the code checked?**
 Lint, `mypy --strict`, the full test suite (including property and concurrency

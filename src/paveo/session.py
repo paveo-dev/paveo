@@ -94,7 +94,7 @@ class Paveo:
         """Prefer ``from_file`` or ``from_policy``; this takes what they build.
 
         ``licence`` is a key for a paid plan; without one the Developer plan
-        applies, which covers two agents per policy (D61, D62, D74). A key that
+        applies, which covers five agents per policy (D61, D62, D74, D94). A key that
         is not one we issued raises ``ConfigError``.
         """
         self._clock = utc_now if now is None else now

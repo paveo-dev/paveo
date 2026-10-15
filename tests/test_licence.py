@@ -2,9 +2,10 @@
 
 The claims:
 
-1. With no key, the Developer plan covers two agents per policy: the first
-   two in the file work, and every call from a third is refused as
-   ``plan_limit``, in shadow mode too. The policy never fails to load for it.
+1. With no key, the Developer plan covers ``FREE`` agents per policy (five,
+   D94): the first ones in the file work, and every call from the next is
+   refused as ``plan_limit``, in shadow mode too. The policy never fails to load
+   for it.
 2. A key we signed raises the limit; one we did not, or one changed by a byte,
    is refused loudly. An expired key reverts to Developer with a warning, and
    never stops the agents a plan still covers.
@@ -35,6 +36,8 @@ from paveo.cli import guard
 
 TODAY = date(2026, 9, 27)
 SIGNER = Ed25519PrivateKey.generate()
+FREE = cast("int", _licence.PLANS["developer"])
+PAST = f"agent-{FREE + 1}"  # the first agent the free plan does not cover
 
 
 def at_noon() -> datetime:
@@ -96,21 +99,28 @@ def paveo(log: Path, agents: int, licence: str | None = None) -> Paveo:
 
 
 # --------------------------------------------------------------------------
-# 1. Developer: two agents per policy (D74)
+# 1. Developer: five agents per policy (D94; two before, D74)
 # --------------------------------------------------------------------------
 
 
-def test_two_agents_need_no_key(log: Path) -> None:
-    with paveo(log, 2) as pf:
-        assert [outcome(pf, f"agent-{n}") for n in (1, 2)] == ["allow"] * 2
+def test_the_free_plan_covers_every_coding_agent_paveo_guards() -> None:
+    """Claude Code, Codex and Cursor in one policy, with room for two more: a
+    developer running several agents meets no plan before seeing it work (D94)."""
+    assert FREE >= 5
 
 
-def test_a_third_agent_is_refused_and_the_first_two_keep_working(
+def test_agents_up_to_the_free_plan_need_no_key(log: Path) -> None:
+    with paveo(log, FREE) as pf:
+        results = [outcome(pf, f"agent-{n}") for n in range(1, FREE + 1)]
+    assert results == ["allow"] * FREE
+
+
+def test_an_agent_past_the_free_plan_is_refused_and_the_rest_keep_working(
     log: Path,
 ) -> None:
-    with paveo(log, 5) as pf:
-        results = [outcome(pf, f"agent-{n}") for n in range(1, 6)]
-    assert results == ["allow"] * 2 + ["plan_limit"] * 3
+    with paveo(log, FREE + 3) as pf:
+        results = [outcome(pf, f"agent-{n}") for n in range(1, FREE + 4)]
+    assert results == ["allow"] * FREE + ["plan_limit"] * 3
 
 
 def test_a_model_call_past_the_plan_is_refused_too(log: Path) -> None:
@@ -119,23 +129,23 @@ def test_a_model_call_past_the_plan_is_refused_too(log: Path) -> None:
         "max_tokens": 10,
         "messages": [{"role": "user", "content": "hi"}],
     }
-    with paveo(log, 4) as pf, pf.session(agent_id="agent-4") as s:
+    with paveo(log, FREE + 1) as pf, pf.session(agent_id=PAST) as s:
         with pytest.raises(PolicyDenied) as refused:
             s.check_llm(request, shape="anthropic")
     assert refused.value.reason == "plan_limit"
 
 
 def test_shadow_mode_does_not_lift_the_plan(log: Path) -> None:
-    policy = document(4)
+    policy = document(FREE + 1)
     for agent in cast("list[dict[str, object]]", policy["agents"]):
         agent["mode"] = "shadow"
     with Paveo.from_policy(policy, audit_path=log, now=at_noon) as pf:
-        assert outcome(pf, "agent-4") == "plan_limit"
+        assert outcome(pf, PAST) == "plan_limit"
         assert outcome(pf, "agent-2") == "allow"
 
 
 def test_the_refusal_tells_the_model_nothing_about_the_plan(log: Path) -> None:
-    with paveo(log, 4) as pf, pf.session(agent_id="agent-4") as s:
+    with paveo(log, FREE + 1) as pf, pf.session(agent_id=PAST) as s:
         with pytest.raises(PolicyDenied) as refused:
             s.check_tool("lookup_order", {})
     assert "(plan_limit)" in refused.value.for_model
@@ -189,10 +199,10 @@ def test_an_expired_key_reverts_to_developer_with_a_warning(
     log: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="paveo"):
-        pf = paveo(log, 4, key("team", days=-1))
+        pf = paveo(log, FREE + 1, key("team", days=-1))
     with pf:
         assert outcome(pf, "agent-2") == "allow"
-        assert outcome(pf, "agent-4") == "plan_limit"
+        assert outcome(pf, PAST) == "plan_limit"
     assert "team licence ended" in caplog.text
 
 
@@ -245,9 +255,9 @@ def test_the_free_core_never_imports_cryptography(tmp_path: Path) -> None:
 def home(tmp_path: Path) -> Path:
     directory = tmp_path / ".paveo"
     directory.mkdir()
-    policy = document(4)
+    policy = document(FREE + 1)
     agents = cast("list[dict[str, object]]", policy["agents"])
-    agents[3]["id"] = "claude-code"
+    agents[FREE]["id"] = "claude-code"
     (directory / "policy.json").write_text(json.dumps(policy), encoding="utf-8")
     return directory
 
@@ -307,9 +317,9 @@ def test_a_trial_after_thirty_days_reverts_with_a_warning(
     log: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="paveo"):
-        pf = paveo(log, 4, old_trial(TODAY - timedelta(days=31)))
+        pf = paveo(log, FREE + 1, old_trial(TODAY - timedelta(days=31)))
     with pf:
-        assert outcome(pf, "agent-4") == "plan_limit"
+        assert outcome(pf, PAST) == "plan_limit"
         assert outcome(pf, "agent-2") == "allow"
     assert "team trial licence ended" in caplog.text
 
@@ -352,21 +362,21 @@ def test_paveo_trial_is_no_longer_a_command(home: Path) -> None:
 
 
 def test_the_trial_is_over_on_its_thirtieth_day(log: Path) -> None:
-    with paveo(log, 4, old_trial(TODAY - timedelta(days=30))) as pf:
-        assert outcome(pf, "agent-4") == "plan_limit"
+    with paveo(log, FREE + 1, old_trial(TODAY - timedelta(days=30))) as pf:
+        assert outcome(pf, PAST) == "plan_limit"
 
 
 def test_a_long_running_process_reverts_when_its_key_ends(log: Path) -> None:
     moment = [at_noon()]
     with Paveo.from_policy(
-        document(4),
+        document(FREE + 1),
         audit_path=log,
         now=lambda: moment[0],
         licence=old_trial(TODAY - timedelta(days=29)),
     ) as pf:
-        assert outcome(pf, "agent-4") == "allow"
+        assert outcome(pf, PAST) == "allow"
         moment[0] += timedelta(days=1)  # the trial ends overnight
-        assert outcome(pf, "agent-4") == "plan_limit"
+        assert outcome(pf, PAST) == "plan_limit"
         assert outcome(pf, "agent-2") == "allow"
 
 
@@ -380,10 +390,10 @@ def test_a_refused_key_leaves_the_log_free_for_the_retry(log: Path) -> None:
 def test_every_record_says_which_plan_was_in_force(log: Path) -> None:
     from conftest import records_in  # noqa: PLC0415
 
-    with paveo(log, 4, key("team")) as pf:
-        outcome(pf, "agent-4")
-    with paveo(log, 4) as pf:
-        outcome(pf, "agent-4")
+    with paveo(log, FREE + 1, key("team")) as pf:
+        outcome(pf, PAST)
+    with paveo(log, FREE + 1) as pf:
+        outcome(pf, PAST)
     assert [(r["plan"], r["decision"]) for r in records_in(log)] == [
         ("team", "allow"),
         ("developer", "deny"),

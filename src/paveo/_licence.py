@@ -1,6 +1,7 @@
 """Plans and licence keys (D46, D61, D62).
 
-The free plan, Developer, covers up to two agents per policy (D74). A key sold for a
+The free plan, Developer, covers up to five agents per policy (D94; two until 15
+Oct 2026, D74), so one developer runs every coding agent free. A key sold for a
 paid plan raises that and switches on the paid features. **Everything is checked
 here, offline** (locked decision #2): a key is a signed statement of its plan and
 its expiry date, and its signature is verified against ``PUBLIC_KEY`` with no
@@ -52,7 +53,7 @@ _MAX_KEY_LENGTH = 1024
 
 # Agents per policy each plan covers; None is no limit.
 PLANS: dict[str, int | None] = {
-    "developer": 2,
+    "developer": 5,
     "team": 10,
     "business": 50,
     "enterprise": None,

@@ -54,7 +54,13 @@ from typing import TextIO
 # and a hook it ran on 7 Oct 2026 saw no CLAUDE_TOOL_*, TOOL_* or CLAUDE_FILE_*.
 # The prefixes, not a list of names, because the wrong names vary:
 # CLAUDE_TOOL_INPUT_FILE_PATH, CLAUDE_TOOL_INPUT_command, TOOL_INPUT_FILE, ...
-_NEVER_SET = r"(?:CLAUDE_TOOL_|CLAUDE_FILE_PATH|TOOL_INPUT|TOOL_NAME|TOOL_OUTPUT)\w*"
+# CLAUDE_BASH_COMMAND by name, not CLAUDE_BASH_ as a prefix: the environment
+# variables page documents CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR (read 15 Oct
+# 2026), and a real variable reported as unset is the false alarm this avoids.
+_NEVER_SET = (
+    r"(?:CLAUDE_TOOL_|CLAUDE_FILE_PATH|CLAUDE_BASH_COMMAND|TOOL_INPUT|TOOL_NAME"
+    r"|TOOL_OUTPUT)\w*"
+)
 _SHELL_READ = re.compile(rf"\$(?:env:)?\{{?(?P<name>{_NEVER_SET})")
 _PYTHON_READ = re.compile(
     rf"(?:environ(?:\.get)?\s*[\[(]|getenv\s*\()\s*[\"'](?P<name>{_NEVER_SET})[\"']"
@@ -174,7 +180,8 @@ _EXIT_UNKNOWN = re.compile(r"\bexit\s+[\"'$]")
 _AT_COMMAND = r"(?:^|[;&|{(\n]|\b(?:then|do|else|while)\b)\s*"
 _STDIN = re.compile(
     _AT_COMMAND + r"(?:IFS=\S*\s+)?read\s+(?:-[a-zA-Z]+\s+)*[A-Za-z_]"
-    r"|\$\(\s*cat\s*\)|/dev/stdin|-t\s+0\b|sys\.stdin|process\.stdin"
+    r"|\$\(\s*cat(?:\s+-)?\s*(?:\)|2>|\|\|)|/dev/stdin|-t\s+0\b|sys\.stdin"
+    r"|process\.stdin"
     r"|readFileSync\(\s*0",
     re.MULTILINE,
 )
@@ -452,8 +459,24 @@ def _assigns(name: str, text: str) -> bool:
 def _falls_back(name: str, text: str) -> bool:
     """Whether ``text`` tests ``name`` for empty and reads stdin: a hook that
     tries the variable first and the real input second works, so it is left
-    alone. Found on a public repo by running this over 153 of them, 7 Oct."""
-    tested = re.search(rf"-[nz]\s+\"?\$\{{?{name}\b|\$\{{{name}:[-=][^}}]", text)
+    alone. Found on a public repo by running this over 153 of them, 7 Oct. The
+    test may be on a copy, ``cmd="${X:-}"`` then ``-z "$cmd"``, which a public
+    repository's hooks did (D93); a copy counts only when it is made from
+    ``name`` alone."""
+    # The value is the variable and nothing else: matching quotes or none, and
+    # only an empty default (`${X:-}`), so the copy is empty exactly when X is.
+    copies = [
+        match.group(1)
+        for match in re.finditer(
+            rf"\b(\w+)=([\"']?)\$(?:\{{{name}(?::-)?\}}|{name}\b)\2"
+            r"(?=[ \t]*(?:;|&&|\|\||\)|\n|$)|[ \t]+#)",
+            text,
+        )
+    ]
+    tested = any(
+        re.search(rf"-[nz]\s+\"?\$\{{?{each}\b|\$\{{{each}:[-=][^}}]", text)
+        for each in (name, *copies)
+    )
     return bool(tested and _STDIN.search(text))
 
 

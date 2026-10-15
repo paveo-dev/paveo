@@ -68,13 +68,14 @@ Overclaiming is itself a security problem, so:
   dependency is for paid plans only: `paveo[team]` adds `cryptography`, used
   solely to verify a licence key's signature, offline, and imported only when a
   key is read. The free plan never loads it, and a test proves that.
-- **You can read every line.** The licence is the
-  [Elastic License 2.0](https://github.com/paveo-dev/paveo/blob/main/LICENSE) —
-  source-available, not open source. Audit it, run it, modify it, embed it in a
-  commercial product; you may not resell Paveo itself as a hosted service.
-  Being able to read the code is half of why a security team would accept it in
-  their call path. The other half is that nothing leaves their machine, and
-  neither substitutes for the other. See D22.
+- **You can read every line, and almost all of it is open source.** Paveo is
+  [Apache-2.0](https://github.com/paveo-dev/paveo/blob/main/LICENSE), except the
+  paid audit evidence export, `src/paveo/_evidence.py`, which is under the
+  [Elastic License 2.0](https://github.com/paveo-dev/paveo/blob/main/LICENSE-ELASTIC).
+  The guard and every free command never import that file, and a test proves it,
+  so nothing licence-keyed sits in your agents' call path. Being able to read the
+  code is half of why a security team would accept it there; the other half is
+  that nothing leaves their machine. See D95 (D22 before it).
 
 ## Scope
 

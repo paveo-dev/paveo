@@ -298,8 +298,9 @@ them all, so `cd` into the project first.
 **One policy for every agent in a project.** Run `init` for a second agent in
 the same project (`init cursor` after `init claude-code`, say) and its starter
 rules are added to the `.paveo/policy.json` already there, so one file covers
-both. The free plan covers two agents per policy: `init` for a third says so and
-changes nothing.
+all of them. The free plan covers five agents per policy, so Claude Code, Codex
+and Cursor fit together; `init` for an agent past five says so and changes
+nothing.
 
 If you move or delete that virtualenv, the hook stops working **silently**:
 Claude Code treats a hook it cannot run as one with no objection. So after any
@@ -391,8 +392,16 @@ file it is kept out of git; if your team already had one, `init` adds to it and
 says so.
 
 **What the guard cannot do.** It matches patterns in a command. It does not
-understand the shell, so `rm -r -f`, a command hidden in a variable, or a script
-that does the deleting will get past it. A file the agent writes is judged by
+understand the shell, so `rm -r -f`, a command hidden in a variable or an alias,
+a script that does the deleting or pushing, a quoted verb (`git 'push'`), an
+abbreviated flag (`git reset --ha`), a line continuation, or `git` given four or
+more words of its own options before `push`, `reset` or `clean`, or a flag more
+than 100 characters after the verb will get past it. The other way round,
+within those 100 characters a force flag (`--force`, or a short cluster ending
+in `f`, read without regard to case), a `+` after `push` or `--hard` is refused
+even when it belongs to the next command (`git push && date +%s`, `git -C repo
+push && docker compose -f x.yml up`): the guard reads text, not shell words, and
+leans to refusing. A file the agent writes is judged by
 its path as written and by the file it really reaches through symbolic links
 and `..` (a hard link is judged by its own name),
 but a link made after the guard said yes and before the agent opened the file
@@ -455,9 +464,9 @@ dropped, and a batch that holds a tool call is refused.
 
 ## Plans
 
-**Developer is free, forever: up to two agents per policy**, every rule, the
+**Developer is free, forever: up to five agents per policy**, every rule, the
 seatbelt, budgets and the audit log. A policy that declares more still loads: the
-first two agents in the file keep working, and every call from the others is
+first five agents in the file keep working, and every call from the others is
 refused as `plan_limit`, never let through. A paid plan raises the limit with a
 licence key, `Paveo.from_file(..., licence="paveo1....")` in the library or the
 key in `.paveo/licence.key` for the guard (which `init` keeps out of git). The key
@@ -606,20 +615,23 @@ repository's release workflow, through PyPI's trusted publishing; see
 
 ## Licence
 
-[Elastic License 2.0](https://github.com/paveo-dev/paveo/blob/main/LICENSE)
-— **source-available, not open source.**
+**Open source: [Apache License 2.0](https://github.com/paveo-dev/paveo/blob/main/LICENSE)**,
+except one file. The guard, the starter policies, `doctor`, the MCP guard,
+replay, budgets, the audit log and the library are all Apache-2.0: use them,
+change them, ship them inside your own product, commercial or not.
 
-Read every line, run it, change it, embed it in your own product, commercial or
-not, and pay nothing. What it forbids is narrow and worth reading in full, but in
-short: you may not offer Paveo itself to third parties as a hosted or managed
-service; you may not circumvent licence-key functionality; and you may not remove
-the licensor's notices. If you pass a copy on, the terms go with it, and a
-modified copy has to say prominently that it was modified.
+The exception is the paid audit evidence export, `src/paveo/_evidence.py`, under
+the [Elastic License 2.0](https://github.com/paveo-dev/paveo/blob/main/LICENSE-ELASTIC):
+you can read it, and its licence says you may not provide it to others as a hosted
+or managed service, or "move, change, disable, or circumvent the license key
+functionality" in it. That is a licence term, not a lock: the key check itself is
+in the Apache-licensed core, where anyone can read it. **Nothing free ever loads
+the export**: only `paveo evidence` imports it, and a test fails if the guard or
+any free command does.
 
 Being able to *read* the code is half of why a security-conscious team would
 accept it in their call path; the other half is that nothing leaves their
-machine. Neither substitutes for the other, which is why the licence is
-source-available rather than closed.
+machine. Neither substitutes for the other.
 
 ## Status
 

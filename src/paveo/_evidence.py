@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Elastic-2.0
+# The one file not under Apache-2.0 (LICENSE-ELASTIC, D95): a paid feature,
+# imported only by `paveo evidence`.
 """Audit evidence: a period of the audit log, packaged for an auditor (D66).
 
 ``paveo evidence`` writes one folder:

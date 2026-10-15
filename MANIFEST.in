@@ -2,6 +2,7 @@
 # one command). setuptools' default manifest ships test*.py but not conftest.py,
 # which every test file imports, so an unpacked sdist failed at collection.
 include LICENSE
+include LICENSE-ELASTIC
 include SECURITY.md
 include Makefile
 include MANIFEST.in

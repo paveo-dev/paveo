@@ -88,6 +88,37 @@ def _doctor(tmp_path: Path, files: list[Path]) -> tuple[int, str]:
             "python3 -c \"import os; os.environ.get('CLAUDE_TOOL_INPUT') or '{}'\"",
             ["reads $CLAUDE_TOOL_INPUT,"],
         ),
+        # A guard in a public repository, missed before CLAUDE_BASH_COMMAND (D93).
+        (
+            "PreToolUse",
+            'if echo "$CLAUDE_BASH_COMMAND" | grep -qE "git add -A"; '
+            "then echo 'BLOCKED' && exit 1; fi",
+            ["reads $CLAUDE_BASH_COMMAND,", "exits 1 and never 2"],
+        ),
+        # `#` glued to the value is part of it, not a comment: the copy is never
+        # empty, so stdin is never read (fifth review).
+        (
+            "PreToolUse",
+            'cmd="${CLAUDE_TOOL_INPUT_command}#x"; [ -z "$cmd" ] && cmd=$(cat); '
+            'echo "$cmd" | grep -q rm && exit 2; exit 0',
+            ["reads $CLAUDE_TOOL_INPUT_command,"],
+        ),
+        # Not a copy of the variable alone: text inside the quotes, so the copy
+        # is never empty (sixth review).
+        (
+            "PreToolUse",
+            'cmd="${CLAUDE_TOOL_INPUT_command} #x"; [ -z "$cmd" ] && cmd=$(cat); '
+            'echo "$cmd" | grep -q rm && exit 2; exit 0',
+            ["reads $CLAUDE_TOOL_INPUT_command,"],
+        ),
+        # A copy made in a pipeline runs in a subshell and never sets the name,
+        # so it is no fallback, spaced or not (third review).
+        (
+            "PreToolUse",
+            'cmd="${CLAUDE_TOOL_INPUT_command:-}" | cat; [ -z "$cmd" ] && '
+            'cmd=$(cat); echo "$cmd" | grep -q rm && exit 2; exit 0',
+            ["reads $CLAUDE_TOOL_INPUT_command,"],
+        ),
     ],
 )
 def test_the_broken_shapes_found_in_public_repos_are_named(
@@ -119,6 +150,26 @@ def test_a_hook_in_command_and_args_form_is_read(tmp_path: Path) -> None:
         # Tries the variable, then reads stdin when it is empty: it works.
         'if [ -n "$CLAUDE_TOOL_INPUT" ]; then i="$CLAUDE_TOOL_INPUT"; '
         "elif [ ! -t 0 ]; then i=$(cat); fi",
+        # The same through a copy, and stdin read with its errors silenced:
+        # A public repository's hooks, reported as broken although they work (D93).
+        'cmd="${CLAUDE_TOOL_INPUT_command:-}"\n'
+        'if [[ -z "$cmd" ]]; then input=$(cat 2>/dev/null || true); '
+        "cmd=$(printf '%s' \"$input\" | jq -r '.tool_input.command // empty'); fi\n"
+        '[[ "$cmd" == *rm* ]] && { echo no >&2; exit 2; }; exit 0',
+        # The same on one line, as a settings.json command is (/code-review).
+        'cmd="${CLAUDE_TOOL_INPUT_command:-}"; if [[ -z "$cmd" ]]; then '
+        "cmd=$(cat 2>/dev/null | jq -r '.tool_input.command // empty'); fi; "
+        '[[ "$cmd" == *rm* ]] && { echo no >&2; exit 2; }; exit 0',
+        # `||` and a trailing comment leave the copy in this shell (fourth review).
+        'cmd="${CLAUDE_TOOL_INPUT_command:-}" || true\n'
+        '[ -z "$cmd" ] && cmd=$(cat); echo "$cmd" | grep -q rm && exit 2; exit 0',
+        'cmd="${CLAUDE_TOOL_INPUT_command:-}"  # copy\n'
+        '[ -z "$cmd" ] && cmd=$(cat); echo "$cmd" | grep -q rm && exit 2; exit 0',
+        # A copy joined to the test by `&&` sets the variable (third review).
+        'cmd="${CLAUDE_TOOL_INPUT_command:-}"&&[ -z "$cmd" ] && cmd=$(cat); '
+        '[[ "$cmd" == *rm* ]] && { echo no >&2; exit 2; }; exit 0',
+        # A variable Claude Code documents (env-vars page, 15 Oct 2026).
+        'echo "$CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR"',
         '"$CLAUDE_PROJECT_DIR"/.paveo/bin/paveo guard claude-code',
         'grep -q x && echo \'{"permissionDecision":"deny"}\'; exit 1',
         "grep -q x && exit 2; [ -f y ] || exit 1",

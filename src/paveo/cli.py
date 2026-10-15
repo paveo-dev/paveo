@@ -54,7 +54,7 @@ from functools import partial
 from pathlib import Path
 from typing import BinaryIO, TextIO
 
-from . import _doctor, _evidence, _mcp, enforce
+from . import _doctor, _mcp, enforce
 from ._harnesses import (
     CLAUDE_CODE,
     CODEX,
@@ -130,6 +130,11 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return 
     if arguments.command == "mcp":
         return _guard_mcp(directory, arguments.agent, arguments.server)
     if arguments.command == "evidence":
+        # Imported here, never at the top: _evidence is the one Elastic-licensed
+        # file, and the guard, doctor and every free command must not load it
+        # (D95; tests/test_repo_claims.py proves it).
+        from . import _evidence  # noqa: PLC0415
+
         now = datetime.now(UTC)
         return _evidence.command(
             directory=directory,

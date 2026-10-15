@@ -9,16 +9,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "paveo"
-version = "0.1.6"
+version = "0.1.7"
 description = "One set of rules for every AI coding agent your team runs: Claude Code, Codex and Cursor ask before shell commands and file writes, with a record that proves it."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "MD Faiz Jamal" }]
-# Source-available, not open source: readable and embeddable, but not resellable
-# as a hosted service. Chosen over BSL 1.1 because BSL converts itself to open
-# source on a date you must maintain per release. See D22.
-license = "Elastic-2.0"
-license-files = ["LICENSE"]
+# Open core (D95): Apache-2.0, except the files LICENSE-ELASTIC names, which are
+# under the Elastic License 2.0 and which the free core never imports. Until
+# 15 Oct 2026 all of it was Elastic-2.0 (D22).
+license = "Apache-2.0 AND Elastic-2.0"
+license-files = ["LICENSE", "LICENSE-ELASTIC"]
 keywords = ["agents", "coding-agents", "claude-code", "policy", "llm"]
 classifiers = [
     "Development Status :: 3 - Alpha",

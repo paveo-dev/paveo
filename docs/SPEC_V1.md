@@ -88,7 +88,7 @@ from paveo import Paveo, PolicyDenied, BudgetExceeded
 
 pf = Paveo.from_file("paveo.json")       # or Paveo.from_policy(obj)
 # Both take licence="paveo1...." for a paid plan; without one the Developer
-# plan covers two agents per policy (D61, D62, D74). Checked offline.
+# plan covers five agents per policy (D61, D62, D74, D94). Checked offline.
 
 with pf.session(agent_id="refund-bot", principal="user_123") as s:
 
@@ -1009,6 +1009,10 @@ fix it** and must never contain payload content.
    to enterprise procurement. The cost is recorded rather than hidden: ELv2 is
    not OSI-approved, and organisations with a blanket policy against non-OSI
    licences will not evaluate us.
+   **Superseded 2026-10-15 — open core, see D95.** That cost arrived: a
+   company declined over it. Apache-2.0 for everything except the paid evidence export,
+   which stays under Elastic in `LICENSE-ELASTIC` and is never imported by the
+   free core.
 
 5. **How does the price table get re-verified, and by whom?** §10.10 is a
    maintenance gap, not a design gap — which means it is only closed by a person
