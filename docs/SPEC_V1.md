@@ -88,7 +88,7 @@ from paveo import Paveo, PolicyDenied, BudgetExceeded
 
 pf = Paveo.from_file("paveo.json")       # or Paveo.from_policy(obj)
 # Both take licence="paveo1...." for a paid plan; without one the Developer
-# plan covers five agents per policy (D61, D62, D74, D94). Checked offline.
+# plan covers three agents per policy (D61, D62, D74, D98). Checked offline.
 
 with pf.session(agent_id="refund-bot", principal="user_123") as s:
 

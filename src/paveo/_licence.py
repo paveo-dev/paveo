@@ -1,11 +1,12 @@
 """Plans and licence keys (D46, D61, D62).
 
-The free plan, Developer, covers up to five agents per policy (D94; two until 15
-Oct 2026, D74), so one developer runs every coding agent free. A key sold for a
-paid plan raises that and switches on the paid features. **Everything is checked
-here, offline** (locked decision #2): a key is a signed statement of its plan and
-its expiry date, and its signature is verified against ``PUBLIC_KEY`` with no
-call to anyone. The signing key never leaves the maintainer's machine.
+The free plan, Developer, covers up to three agents per policy (D98; five in
+0.1.7, D94; two before, D74), so one developer runs Claude Code, Codex and Cursor
+free. A key sold for a paid plan raises that and switches on the paid features.
+**Everything is checked here, offline** (locked decision #2): a key is a signed
+statement of its plan and its expiry date, and its signature is verified against
+``PUBLIC_KEY`` with no call to anyone. The signing key never leaves the
+maintainer's machine.
 
 **Only a key needs a dependency.** Verifying an Ed25519 signature is done by
 ``cryptography``, which the free core never imports: it is loaded only when a key
@@ -53,7 +54,7 @@ _MAX_KEY_LENGTH = 1024
 
 # Agents per policy each plan covers; None is no limit.
 PLANS: dict[str, int | None] = {
-    "developer": 5,
+    "developer": 3,
     "team": 10,
     "business": 50,
     "enterprise": None,

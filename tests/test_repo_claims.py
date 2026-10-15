@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 import paveo
+from paveo import _licence
 
 ROOT = Path(__file__).parent.parent
 
@@ -170,6 +171,27 @@ def test_every_file_the_security_review_cites_exists() -> None:
         cited = {path for path in cited if not path.startswith(".github/")}
     missing = sorted(path for path in cited if not (ROOT / path).exists())
     assert not missing, f"SECURITY_REVIEW.md cites files that do not exist: {missing}"
+
+
+FREE_PLAN_CLAIM = re.compile(
+    r"(?:free plan covers|Developer is free, forever: up to|plan covers|the first)"
+    r"\s+(\w+)\s+agents"
+)
+NUMBER_WORDS = {"two": 2, "three": 3, "four": 4, "five": 5, "six": 6}
+
+
+@pytest.mark.parametrize(
+    "name", ["README.md", "docs/SECURITY_REVIEW.md", "docs/SPEC_V1.md"]
+)
+def test_published_pages_state_the_free_plan_the_code_enforces(name: str) -> None:
+    """Every page that states the free plan's agent count states the code's.
+
+    The number changed three times in a month (D74, D94, D98) and a page was
+    left behind each time a person had to remember it (Rule 5)."""
+    text = (ROOT / name).read_text(encoding="utf-8")
+    stated = [NUMBER_WORDS.get(word, word) for word in FREE_PLAN_CLAIM.findall(text)]
+    assert stated, f"{name} no longer states the free plan; update this test"
+    assert set(stated) == {_licence.PLANS["developer"]}, f"{name} states {stated}"
 
 
 def test_the_readme_states_the_overhead_budgets_the_gate_enforces() -> None:

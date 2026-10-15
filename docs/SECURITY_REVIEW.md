@@ -66,8 +66,8 @@ never overrides a rule's refusal. Two exceptions are stated in section 6: a guar
 that never runs, and an agent you put in shadow mode. Check: `docs/SPEC_V1.md` §7 and `tests/test_cli.py`.
 
 **What happens when a licence key expires?**
-The free plan applies, with a warning: every rule keeps enforcing, the first two
-agents keep working, and an agent past two is refused and told why. Nothing is
+The free plan applies, with a warning: every rule keeps enforcing, the first three
+agents keep working, and an agent past three is refused and told why. Nothing is
 ever let through because a key lapsed. A signed key that has been altered is
 refused outright rather than guessed at. A 30-day trial, which only 0.1.0 and
 0.1.1 could start, is a start date written on your machine, not a signed key, so

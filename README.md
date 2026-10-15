@@ -12,6 +12,8 @@ may refuse every call ([details](#coding-agents-claude-code-codex-and-cursor)).
 
 **Nothing leaves your machine.** Paveo runs on each engineer's machine, opens no
 network sockets (a test fails the build if it does), and installs no other package.
+It is open source under Apache-2.0, except the paid audit evidence export
+([licence](#licence)), and free for up to three agents per policy.
 
 **First, check the guards you already have:** `uvx paveo doctor`, run in any
 project with Claude Code hooks, names the ones that cannot work as written, such
@@ -298,8 +300,8 @@ them all, so `cd` into the project first.
 **One policy for every agent in a project.** Run `init` for a second agent in
 the same project (`init cursor` after `init claude-code`, say) and its starter
 rules are added to the `.paveo/policy.json` already there, so one file covers
-all of them. The free plan covers five agents per policy, so Claude Code, Codex
-and Cursor fit together; `init` for an agent past five says so and changes
+all of them. The free plan covers three agents per policy, so Claude Code, Codex
+and Cursor fit together; `init` for an agent past three says so and changes
 nothing.
 
 If you move or delete that virtualenv, the hook stops working **silently**:
@@ -464,10 +466,11 @@ dropped, and a batch that holds a tool call is refused.
 
 ## Plans
 
-**Developer is free, forever: up to five agents per policy**, every rule, the
+**Developer is free, forever: up to three agents per policy**, every rule, the
 seatbelt, budgets and the audit log. A policy that declares more still loads: the
-first five agents in the file keep working, and every call from the others is
-refused as `plan_limit`, never let through. A paid plan raises the limit with a
+first three agents in the file keep working, and every call from the others is
+refused as `plan_limit`, never let through. (0.1.7 covered five: after upgrading,
+a fourth and fifth agent are refused; `paveo mcp` agents count too.) A paid plan raises the limit with a
 licence key, `Paveo.from_file(..., licence="paveo1....")` in the library or the
 key in `.paveo/licence.key` for the guard (which `init` keeps out of git). The key
 is checked on your machine, with no call to anyone; reading one needs

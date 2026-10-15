@@ -2,8 +2,8 @@
 
 The claims:
 
-1. With no key, the Developer plan covers ``FREE`` agents per policy (five,
-   D94): the first ones in the file work, and every call from the next is
+1. With no key, the Developer plan covers ``FREE`` agents per policy (three,
+   D98): the first ones in the file work, and every call from the next is
    refused as ``plan_limit``, in shadow mode too. The policy never fails to load
    for it.
 2. A key we signed raises the limit; one we did not, or one changed by a byte,
@@ -31,7 +31,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from paveo import ConfigError, Paveo, PolicyDenied, _licence
-from paveo._harnesses import CLAUDE_CODE
+from paveo._harnesses import CLAUDE_CODE, HARNESSES
 from paveo.cli import guard
 
 TODAY = date(2026, 9, 27)
@@ -99,14 +99,14 @@ def paveo(log: Path, agents: int, licence: str | None = None) -> Paveo:
 
 
 # --------------------------------------------------------------------------
-# 1. Developer: five agents per policy (D94; two before, D74)
+# 1. Developer: three agents per policy (D98; five in 0.1.7, D94; two before, D74)
 # --------------------------------------------------------------------------
 
 
 def test_the_free_plan_covers_every_coding_agent_paveo_guards() -> None:
-    """Claude Code, Codex and Cursor in one policy, with room for two more: a
-    developer running several agents meets no plan before seeing it work (D94)."""
-    assert FREE >= 5
+    """Claude Code, Codex and Cursor in one policy: a developer running every
+    agent Paveo guards meets no plan before seeing it work (D94, D98)."""
+    assert len(HARNESSES) <= FREE
 
 
 def test_agents_up_to_the_free_plan_need_no_key(log: Path) -> None:
