@@ -1,9 +1,5 @@
 Copyright (c) 2026 MD Faiz Jamal
 
-Paveo is licensed under the Apache License, Version 2.0, below, except for
-the files named in LICENSE-ELASTIC, which are licensed under the Elastic
-License 2.0. The free core never imports them (D95).
-
                                  Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
