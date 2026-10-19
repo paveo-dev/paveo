@@ -18,7 +18,11 @@ It is open source under Apache-2.0, except the paid audit evidence export
 **First, check the guards you already have:** `uvx paveo doctor`, run in any
 project with Claude Code hooks, names the ones that cannot work as written, such
 as guards that can never block. (`uvx` comes with
-[uv](https://docs.astral.sh/uv/) and fetches a suitable Python itself.)
+[uv](https://docs.astral.sh/uv/) and fetches a suitable Python itself.) Then
+`uvx paveo test` sends those hooks 41 spellings of five dangerous actions, the
+way Claude Code sends a call, and names each spelling that gets past them; in CI,
+`--expect` makes the build fail the day a guard stops stopping one
+([details](#test-the-hooks-you-already-have)).
 
 ```
 pip install paveo            # Python 3.11+ (python3 --version), macOS or Linux
@@ -274,7 +278,7 @@ hash-chained, on your disk. Never a prompt, a completion or a tool argument.
 `check_llm`, `wrap_anthropic`, `remaining`, `PolicyDenied.for_model`, the policy
 file with shadow mode, `not_matches`, `requires`, `rate` and `repeat`,
 `verify_chain`, the `paveo` command (`init`, the guard for Claude Code, Codex and
-Cursor, `stop`, `resume`, `replay`, `learn`, `evidence`, `mcp`, `doctor`), starter
+Cursor, `stop`, `resume`, `replay`, `learn`, `evidence`, `mcp`, `doctor`, `test`), starter
 policies, and readers for Anthropic, OpenAI Chat Completions and Gemini
 `generate_content` requests. **Not built yet:** `async_session`, and a budget
 shared across processes.
@@ -359,10 +363,69 @@ sight, so it is left alone. Other faults, a missing `jq` among them, are not loo
 runs a hook and never prints a command or a script's text, only where each is. Its
 report is on stdout; once it has checked at least one hook, one line on stderr asks
 how it went, with a link to Discussions. Exit 0: nothing found; 1: a fault found; 2: a
-file it could not read, or a `--settings` file that is not there, which it says
-it did not check. It does not need a
+file it could not read, one Claude Code would reject whole (not strict UTF-8, a
+byte-order mark, `NaN` or `Infinity`, or a key Paveo reads of the wrong type: a hook event that is not a list, an `env` or
+`enabledPlugins` value, a permission rule list, `permissions.defaultMode`), or a
+`--settings` file that is not there, which it says it did not check. It does not need a
 policy, and works whether or not you use Paveo's guard. Pass `--settings FILE`
 to check another file.
+
+### Test the hooks you already have
+
+`paveo test`, run in a project, **runs** the PreToolUse hooks in the same three
+settings files (like `make test`, run it only on a project whose code you would
+run anyway). It sends each one, as the JSON Claude Code sends, every spelling of
+five dangerous actions: a force push, a recursive delete, a hard reset, `git
+clean`, and reading `.env`, 41 in all, such as `git -C . push --force`, `git push
+paveo-test-probe +main`, `\rm -rf`, `find -delete`, `sh -c '...'` and the Read tool. It
+reads each answer as Claude Code's hooks reference does: exit 2, a
+`permissionDecision` of `deny` (in a `hookSpecificOutput` that names
+`PreToolUse`, as the schema requires) or the older `decision: block` stops the
+call, and `ask` stops it for a person to decide (in a session that starts in
+default, plan or acceptEdits mode, or dontAsk, which refuses it; the report says
+so whenever it counts one); any other exit, JSON that fails
+the schema, a hook that will not start, and one past its own time limit let it
+through, unless the hook sets `onFailure: "block"`. Shell-form hooks run under
+`sh -c`, or bash when the hook says `"shell": "bash"`. No hook is given more than
+10 seconds; one stopped then, before its own limit, cannot be told, and a hook
+that times out is not run again for the other spellings. Every spelling is harmless if
+a hook ran it: deletes and resets aim at a path or ref that does not exist,
+pushes at a remote that does not exist.
+
+```
+paveo test --expect force-push --expect delete   # in CI: fails on any leak
+```
+
+It prints, per action, how many spellings were stopped and each one that passed
+every hook. **Exit 1** when an action is stopped in some spellings and not others,
+when no hook stops any action at all (the settings moved, or every hook was
+switched off), or when an `--expect` action (`force-push`, `delete`, `hard-reset`, `clean`,
+`secrets`) passes in any spelling; an action no hook stops is reported, and fails
+only when expected. **Exit 2** when it could not tell: a settings file it could not
+read, a hook it does not run (one with an `if` filter, a timeout that is not a
+positive number, a matcher written in regex syntax JavaScript reads differently,
+PowerShell, or an `http`, `prompt`, `agent` or `mcp_tool` hook) where no other
+hook stops the call, or only an ask does (the hook not run might defer, which
+outranks it), output over 1 MiB,
+a hook that also stops `git status`, so its stops may not mean it read the
+command, or managed settings on the machine
+(`/Library/Application Support/ClaudeCode/`, `/etc/claude-code/` or a macOS
+profile), which are not read yet and can switch every hook off; server-managed
+settings leave nothing on disk, so it cannot see them. Otherwise 0. **A pass means these spellings were stopped, not that the
+guard holds**: a list cannot be complete. Claude Code's own permission rules are not
+tested yet, and it says so when a file has them: they can only stop more. A
+settings file Claude Code would reject whole (not UTF-8, a byte-order mark, `NaN`
+or `Infinity`, a key Paveo reads of the wrong type, as for `doctor`) is reported as unread; `init`
+refuses to write a guard into one, and `paveo guard --selftest` counts no hook
+in one, so a guard found only there fails as missing; a wrong type in a key it does
+not read is not detected, and Claude Code then runs none of that file's hooks.
+A stop that relies on `onFailure: "block"` holds on Claude Code v2.1.295 or later. Hooks
+from plugins are not run yet either; they can stop more too, but one that defers
+would outrank an ask, so with plugins enabled an ask is not counted as a stop. It
+never prints a hook's command or
+output, only where the hook is. Run against Paveo's own starter it reports
+`rm -r -f` and `find -delete` getting past it (below), and `.env` not guarded,
+since `init`'s hook does not watch Read.
 
 **Codex.** Built against Codex's documented hook contract and its source, and
 **it has refused `rm -rf` in a real session** (macOS, 26 Sep 2026). It checks
@@ -394,7 +457,7 @@ file it is kept out of git; if your team already had one, `init` adds to it and
 says so.
 
 **What the guard cannot do.** It matches patterns in a command. It does not
-understand the shell, so `rm -r -f`, a command hidden in a variable or an alias,
+understand the shell, so `rm -r -f`, `find -delete`, a command hidden in a variable or an alias,
 a script that does the deleting or pushing, a quoted verb (`git 'push'`), an
 abbreviated flag (`git reset --ha`), a line continuation, or `git` given four or
 more words of its own options before `push`, `reset` or `clean`, or a flag more
@@ -619,7 +682,7 @@ repository's release workflow, through PyPI's trusted publishing; see
 ## Licence
 
 **Open source: [Apache License 2.0](https://github.com/paveo-dev/paveo/blob/main/LICENSE)**,
-except one file. The guard, the starter policies, `doctor`, the MCP guard,
+except one file. The guard, the starter policies, `doctor`, `test`, the MCP guard,
 replay, budgets, the audit log and the library are all Apache-2.0: use them,
 change them, ship them inside your own product, commercial or not.
 

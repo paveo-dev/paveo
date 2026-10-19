@@ -29,6 +29,7 @@ from importlib import resources
 from pathlib import Path
 from typing import TextIO
 
+from ._doctor import misshapen, parse_settings
 from ._harnesses import CLAUDE_CODE, CODEX, CURSOR, Harness, for_policy, real_paths
 from ._licence import DEVELOPER, LICENCE_FILE, Plan, apply, plan_in
 from ._policy_document import load_document, load_file
@@ -238,12 +239,9 @@ def _plan_hook(
     harness: Harness, target: Path, hook_files: Sequence[Path], out: TextIO
 ) -> _HookPlan | None:
     """Read every hook file first. ``None`` means refuse, having said why."""
-    documents: dict[Path, dict[str, object]] = {}
-    for path in dict.fromkeys([*hook_files, target]):
-        document = _read_settings(path, out)
-        if document is None:
-            return None
-        documents[path] = document
+    documents = _read_hook_files(harness, target, hook_files, out)
+    if documents is None:
+        return None
     for path, document in documents.items():
         if harness is CLAUDE_CODE and document.get("disableAllHooks") is True:
             out.write(
@@ -428,11 +426,49 @@ def _past_plan(
     )
 
 
+def _read_hook_files(
+    harness: Harness, target: Path, hook_files: Sequence[Path], out: TextIO
+) -> dict[Path, dict[str, object]] | None:
+    """Every hook file the agent loads, by path, or ``None`` to refuse, having
+    said why. A Claude Code file it rejects whole is left out, said in a note;
+    if it is the target, init refuses."""
+    documents: dict[Path, dict[str, object]] = {}
+    for path in dict.fromkeys([*hook_files, target]):
+        document = _read_settings(path, out)
+        if document is None:
+            return None
+        wrong = misshapen(document) if harness is CLAUDE_CODE else None
+        if wrong is not None and _same_place(path, target):
+            # A guard written into a file Claude Code rejects whole would never
+            # run, while init said it was on (locked decision #4).
+            out.write(
+                f"FAIL {path}: its {wrong} has the wrong type, and Claude Code "
+                "rejects such a file whole, so a guard written there would never "
+                "run, and nothing was changed: fix it, then run init again.\n"
+            )
+            return None
+        if wrong is not None and document.get("disableAllHooks") is True:
+            # Whether Claude Code drops the file or applies it, read the safe
+            # way both times: its hooks do not count, and its switch does.
+            out.write(
+                f"FAIL {path} sets disableAllHooks, so no hook may run at all. "
+                f"Remove it, then run init again.\n"
+            )
+            return None
+        # Claude Code drops only that file: its hooks, a paveo one included,
+        # do not run, so none of them counts as already there. A file that
+        # cannot be parsed at all still refuses, above: Paveo and Claude Code
+        # may disagree on it, and then its disableAllHooks could apply unseen.
+        if not _rejected_whole(harness, path, document, out):
+            documents[path] = document
+    return documents
+
+
 def _read_settings(path: Path, out: TextIO) -> dict[str, object] | None:
     """A hook file as a dict, ``{}`` if absent, ``None`` (said why) if it
     cannot be read: rewriting what could not be read would drop settings."""
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
+        document = parse_settings(path)
     except FileNotFoundError:
         return {}
     except (OSError, ValueError) as e:
@@ -623,7 +659,10 @@ def _covers(harness: Harness, matcher: object, reaches: Sequence[str] | None) ->
     """Whether a hook's matcher reaches every tool the policy governs. Absent,
     empty and ``*`` match everything. Claude Code's is tool names joined by |
     or ,; Codex's and Cursor's a regular expression, searched."""
-    if matcher is None or matcher in {"", "*"}:
+    if matcher is None or matcher in (
+        "",
+        "*",
+    ):  # a tuple: a list matcher is not hashable
         return True
     if reaches is None or not isinstance(matcher, str):
         return False
@@ -771,15 +810,38 @@ def _paveo_hooks(harness: Harness, path: Path, out: TextIO) -> list[_Hook] | Non
     """The paveo hooks in one hook file, or ``None`` if it exists and cannot be
     read."""
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
+        document = parse_settings(path)
     except FileNotFoundError:
         return []
     except (OSError, ValueError) as e:
         out.write(f"FAIL {path} could not be read ({type(e).__name__})\n")
         return None
-    return (
-        _paveo_hooks_in(harness, path, document) if isinstance(document, dict) else []
-    )
+    if not isinstance(document, dict):
+        out.write(f"note      {path} is not a settings object, so it holds no hook\n")
+        return []
+    if harness is CLAUDE_CODE and document.get("disableAllHooks") is True:
+        # init refuses this; a file edited after init must fail the check too.
+        out.write(f"FAIL {path} sets disableAllHooks, so no hook runs at all\n")
+        return None
+    if _rejected_whole(harness, path, document, out):
+        # None of its hooks counts, and a guard found nowhere else then fails
+        # as missing.
+        return []
+    return _paveo_hooks_in(harness, path, document)
+
+
+def _rejected_whole(
+    harness: Harness, path: Path, document: dict[str, object], out: TextIO
+) -> bool:
+    """Whether Claude Code rejects this file whole, said in a note when it
+    does. The shape is Claude Code's; Codex's and Cursor's rules are unread."""
+    wrong = misshapen(document) if harness is CLAUDE_CODE else None
+    if wrong is not None:
+        out.write(
+            f"note      {path}: its {wrong} has the wrong type, so Claude Code "
+            "ignores that file and its hooks; fix it.\n"
+        )
+    return wrong is not None
 
 
 def _agent_problems(

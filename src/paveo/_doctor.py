@@ -312,32 +312,140 @@ def _settings(
     """The settings in ``path``, or None, with the reason added to ``unread``
     unless the file is simply absent and was not asked for by name."""
     try:
-        if not stat.S_ISREG(path.stat().st_mode):
-            unread.append(f"{path}: not a file")
-            return None
-        settings = json.loads(_read(path))
+        settings = parse_settings(path)
     except FileNotFoundError:
         if named:
             unread.append(f"{path}: no such file")
         return None
-    except (OSError, ValueError, RecursionError) as e:
+    except (OSError, ValueError) as e:
         unread.append(f"{path}: could not read it ({_reason(e)})")
         return None
     if not isinstance(settings, dict):
         unread.append(f"{path}: not a JSON object")
         return None
+    wrong = misshapen(settings)
+    if wrong is not None:
+        unread.append(
+            f"{path}: its {wrong} has the wrong type, and Claude Code rejects such "
+            "a file whole, so its hooks would not run"
+        )
+        return None
     return settings
+
+
+# The settings keys Paveo reads, and their types. Claude Code rejects a user,
+# project or local settings file "whose JSON or top-level shape fails
+# validation" as a whole (managed-settings page, read 20 Oct 2026), so a reader
+# that loaded it would check hooks that never run.
+_SHAPE: dict[str, type] = {
+    "hooks": dict,
+    "disableAllHooks": bool,
+    "permissions": dict,
+    "enabledPlugins": dict,
+    "env": dict,
+}
+# The seven permission modes the settings reference lists, and whether a
+# hook's ask stops the call in each: it goes to a person, or in dontAsk is
+# denied ("auto-denies every call that would otherwise prompt"); in auto and
+# bypassPermissions no one is asked. "manual" is "default" by another name.
+PERMISSION_MODES = {
+    "default": True,
+    "manual": True,
+    "plan": True,
+    "acceptEdits": True,
+    "dontAsk": True,
+    "auto": False,
+    "bypassPermissions": False,
+}
+
+
+def misshapen(settings: dict[str, object]) -> str | None:
+    """The first key Paveo reads whose type the settings reference rules out.
+    Keys Paveo does not read are not checked, and the README says so."""
+    for name, kind in _SHAPE.items():
+        if name in settings and not isinstance(settings[name], kind):
+            return name
+    hooks = settings.get("hooks", {})
+    env = settings.get("env", {})
+    plugins = settings.get("enabledPlugins", {})
+    permissions = settings.get("permissions", {})
+    # Each is a dict by now; the checks below are of what they hold.
+    wrong = [
+        (
+            "hooks",
+            isinstance(hooks, dict)
+            and any(not isinstance(groups, list) for groups in hooks.values()),
+        ),
+        (
+            "env",
+            isinstance(env, dict)
+            and any(not isinstance(value, str) for value in env.values()),
+        ),
+        (
+            "enabledPlugins",
+            isinstance(plugins, dict)
+            and any(not isinstance(value, bool) for value in plugins.values()),
+        ),
+    ]
+    if isinstance(permissions, dict):
+        # A malformed rule inside a list is skipped on its own, "while the rest
+        # of the file applies" (managed-settings page), so only the list counts.
+        for rules in ("allow", "ask", "deny"):
+            listed = permissions.get(rules, [])
+            wrong.append((f"permissions.{rules}", not isinstance(listed, list)))
+        mode = permissions.get("defaultMode", "default")
+        known = isinstance(mode, str) and mode in PERMISSION_MODES
+        wrong.append(("permissions.defaultMode", not known))
+    return next((name for name, bad in wrong if bad), None)
+
+
+class _RefusedError(ValueError):
+    """A file Claude Code would refuse, with the reason to print."""
+
+
+def parse_settings(path: Path) -> object:
+    """``path`` parsed as Claude Code parses a settings file: at most 1 MiB,
+    strict UTF-8, no byte-order mark, no ``NaN`` or ``Infinity``, a regular
+    file. Raises ``FileNotFoundError``, ``OSError`` or ``ValueError``, and
+    nothing else; init, the self-test, doctor and test all read through here,
+    so none trusts a file the others would refuse."""
+    try:
+        return json.loads(_text(_read(path)), parse_constant=_not_json)
+    except RecursionError as e:
+        raise _RefusedError("it is nested too deeply") from e
+
+
+def _text(data: bytes) -> str:
+    """A settings file as Claude Code reads it: UTF-8, strictly. Python's JSON
+    reader would detect UTF-16 and skip a byte-order mark on its own, and read
+    files Claude Code rejects whole, whose hooks never run."""
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise _RefusedError("it starts with a byte-order mark")
+    return data.decode("utf-8")
+
+
+def hook_groups(hooks: object) -> dict[str, list[object]]:
+    """``hooks`` as ``misshapen`` has passed it: an object of lists. Raises
+    rather than skip anything else, since a reader that skipped would report
+    clean on hooks it never read (Rule 3); ``misshapen`` makes it unreachable,
+    and this makes that mechanical (Rule 5)."""
+    if not isinstance(hooks, dict) or not all(
+        isinstance(groups, list) for groups in hooks.values()
+    ):
+        raise TypeError("hooks were read without the shape check")
+    return hooks
+
+
+def _not_json(constant: str) -> object:
+    """Python reads ``NaN`` and ``Infinity``; Claude Code's JSON parser, like
+    every JavaScript one, refuses the file that holds them."""
+    raise _RefusedError(f"{constant} is not JSON")
 
 
 def _hooks(path: Path, hooks: object) -> tuple[list[_Hook], list[str]]:
     found: list[_Hook] = []
     odd: list[str] = []
-    if not isinstance(hooks, dict):
-        return found, [f"{path}: hooks is not an object"]
-    for event, groups in hooks.items():
-        if not isinstance(groups, list):
-            odd.append(f"{path}: {event} is not a list")
-            continue
+    for event, groups in hook_groups(hooks).items():
         for g, group in enumerate(groups):
             entries = group.get("hooks") if isinstance(group, dict) else None
             if not isinstance(entries, list):
@@ -488,8 +596,14 @@ def _uncommented(text: str) -> str:
 
 
 def _read(path: Path) -> bytes:
-    # A bounded read, not a size check and then a read: the file can grow between.
-    with path.open("rb") as file:
+    """A bounded read, not a size check and then a read: the file can grow
+    between. Opened without blocking and checked to be a regular file before a
+    byte is read: a settings path a cloned repository links to a FIFO or a
+    terminal would otherwise hang the command forever."""
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as file:
+        if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+            raise _RefusedError("it is not a regular file")
         data = file.read(_MAX_BYTES + 1)
     if len(data) > _MAX_BYTES:
         raise OSError(f"over {_MAX_BYTES} bytes")
@@ -499,8 +613,10 @@ def _read(path: Path) -> bytes:
 def _reason(error: Exception) -> str:
     if isinstance(error, OSError):
         return error.strerror or str(error)
-    if isinstance(error, RecursionError):
-        return "nested too deeply"
+    if isinstance(error, UnicodeDecodeError):
+        return "not UTF-8"
+    if isinstance(error, _RefusedError):
+        return str(error)
     return "not valid JSON"
 
 

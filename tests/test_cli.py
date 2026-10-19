@@ -496,6 +496,117 @@ def test_selftest_fails_a_hook_whose_binary_is_gone(tmp_path: Path) -> None:
     assert "seatbelt is off" in out
 
 
+@pytest.mark.parametrize("extra", ['"env": {"CI": true}', '"cleanupPeriodDays": NaN'])
+def test_selftest_fails_a_hook_in_a_file_claude_code_rejects_whole(
+    tmp_path: Path, extra: str
+) -> None:
+    """The guard works when run by hand, but Claude Code never loads the file,
+    so the self-test must not say ok."""
+    project = tmp_path / "project"
+    (project / ".paveo").mkdir(parents=True)
+    (project / ".paveo" / "policy.json").write_text(json.dumps(POLICY), "utf-8")
+    shim = paveo_shim(tmp_path / "bin")
+    settings = settings_with(
+        tmp_path, f'"{shim}" guard claude-code --dir "$CLAUDE_PROJECT_DIR/.paveo"'
+    )
+    text = settings.read_text("utf-8")
+    settings.write_text("{" + extra + ", " + text[1:], encoding="utf-8")
+    code, out = run_selftest(tmp_path, settings)
+    assert code == 1
+    assert "FAIL no hook runs `paveo guard claude-code`" in out
+    assert not any(line.startswith("ok") for line in out.splitlines())
+
+
+def test_init_skips_another_file_claude_code_rejects_and_says_so(
+    tmp_path: Path,
+) -> None:
+    """Claude Code drops only the bad file, so init still guards the project,
+    and does not count a paveo hook in that file as already there."""
+    project = tmp_path / "project"
+    (project / ".claude").mkdir(parents=True)
+    shared = project / ".claude" / "settings.json"
+    stale = {
+        "env": {"CI": True},
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Bash|Write|Edit|NotebookEdit",
+                    "hooks": [
+                        {"type": "command", "command": "paveo guard claude-code"}
+                    ],
+                }
+            ]
+        },
+    }
+    shared.write_text(json.dumps(stale), encoding="utf-8")
+    code, out = run_init(project, paveo_shim(tmp_path / "bin"))
+    assert code == 0, out
+    assert "Claude Code ignores that file and its hooks" in out
+    local = json.loads((project / ".claude" / "settings.local.json").read_text())
+    assert local["hooks"]["PreToolUse"]
+    assert json.loads(shared.read_text()) == stale  # never rewritten
+
+
+def test_init_refuses_when_a_skipped_file_switches_every_hook_off(
+    tmp_path: Path,
+) -> None:
+    """A cloned repository's settings both malformed and setting disableAllHooks:
+    whether Claude Code drops that file or applies it, init must not say the
+    guard is on (the /security-review case, D102)."""
+    project = tmp_path / "project"
+    (project / ".claude").mkdir(parents=True)
+    shared = project / ".claude" / "settings.json"
+    shared.write_text(
+        json.dumps({"disableAllHooks": True, "env": {"CI": True}}), encoding="utf-8"
+    )
+    code, out = run_init(project, paveo_shim(tmp_path / "bin"))
+    assert code == 1
+    assert "sets disableAllHooks" in out
+    assert not (project / ".claude" / "settings.local.json").exists()
+
+
+def test_selftest_fails_when_a_hook_file_switches_every_hook_off(
+    tmp_path: Path,
+) -> None:
+    """init refuses this, but the file can be edited after init."""
+    project = tmp_path / "project"
+    (project / ".paveo").mkdir(parents=True)
+    (project / ".paveo" / "policy.json").write_text(json.dumps(POLICY), "utf-8")
+    shim = paveo_shim(tmp_path / "bin")
+    settings = settings_with(
+        tmp_path, f'"{shim}" guard claude-code --dir "$CLAUDE_PROJECT_DIR/.paveo"'
+    )
+    text = settings.read_text("utf-8")
+    settings.write_text('{"disableAllHooks": true, ' + text[1:], encoding="utf-8")
+    code, out = run_selftest(tmp_path, settings)
+    assert code == 1
+    assert "sets disableAllHooks, so no hook runs at all" in out
+
+
+def test_selftest_says_why_a_file_that_is_no_object_holds_no_hook(
+    tmp_path: Path,
+) -> None:
+    settings = settings_with(tmp_path, "paveo guard claude-code")
+    settings.write_text("[]", encoding="utf-8")
+    code, out = run_selftest(tmp_path, settings)
+    assert code == 1
+    assert "is not a settings object, so it holds no hook" in out
+
+
+def test_init_does_not_crash_on_a_matcher_that_is_a_list(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    (project / ".claude").mkdir(parents=True)
+    local = project / ".claude" / "settings.local.json"
+    group = {
+        "matcher": ["Bash"],
+        "hooks": [{"type": "command", "command": "paveo guard claude-code"}],
+    }
+    local.write_text(json.dumps({"hooks": {"PreToolUse": [group]}}), encoding="utf-8")
+    code, out = run_init(project, paveo_shim(tmp_path / "bin"))
+    assert code == 1, out
+    assert "FAIL" in out
+
+
 def test_selftest_fails_a_hook_that_does_not_block(tmp_path: Path) -> None:
     shim = paveo_shim(tmp_path / "bin", body="#!/bin/sh\nexit 0\n")
     settings = settings_with(tmp_path, f"{shim} guard claude-code")
@@ -939,7 +1050,20 @@ def test_init_keeps_every_other_setting(tmp_path: Path) -> None:
     assert len(after["hooks"]["PreToolUse"]) == 2
 
 
-@pytest.mark.parametrize("text", ["{not json", "[]", '{"hooks": []}'])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "{not json",
+        "[]",
+        '{"hooks": []}',
+        # Claude Code rejects these files whole, so a guard written into one
+        # would never run while init said it was on (locked decision #4).
+        '{"env": {"CI": true}}',
+        '{"permissions": {"defaultMode": "yolo"}}',
+        # Python reads NaN; Claude Code's parser refuses the file.
+        '{"model": "x", "cleanupPeriodDays": NaN}',
+    ],
+)
 def test_init_refuses_to_rewrite_settings_it_cannot_read(
     tmp_path: Path, text: str
 ) -> None:

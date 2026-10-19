@@ -386,6 +386,9 @@ def _exercise_command(workdir: Path) -> None:
         )
     )
     assert main(["doctor", "--settings", str(settings)]) == 1
+    # `test` (D102) runs that hook, which exits 1 and so stops nothing. The hook
+    # is its own process; this checks that paveo's side opens no socket.
+    assert main(["test", "--settings", str(settings), "--expect", "delete"]) == 1
 
     # Replay and learn (B3, D53) read session files and write one policy.
     sessions = workdir / "sessions.jsonl"

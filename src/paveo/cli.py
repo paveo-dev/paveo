@@ -11,6 +11,7 @@
     paveo learn claude-code --from-history [PATH ...] [--dir .paveo]
     paveo evidence [--dir .paveo] [--since DATE] [--until DATE] [--out DIR]
     paveo doctor [--settings FILE ...]
+    paveo test [--expect ACTION ...] [--settings FILE ...]
 
 ``--dir`` holds three things, so the hook and the panic button cannot disagree
 about where they are: ``policy.json``, ``audit.jsonl`` and, while stopped,
@@ -35,7 +36,8 @@ process. The standalone no-egress run drives the guard, ``stop``, ``resume`` and
 Setting the guard up, ``init`` and ``--selftest``, lives in ``_setup``; reading
 past sessions, ``replay`` and ``learn``, in ``_replay``; audit evidence, a paid
 feature, in ``_evidence``; the hooks a project already has, ``doctor``, in
-``_doctor``.
+``_doctor``, and ``test``, the one command here that runs them, in
+``_guard_test``.
 """
 
 from __future__ import annotations
@@ -55,6 +57,7 @@ from pathlib import Path
 from typing import BinaryIO, TextIO
 
 from . import _doctor, _mcp, enforce
+from ._bypasses import ACTIONS
 from ._harnesses import (
     CLAUDE_CODE,
     CODEX,
@@ -111,6 +114,37 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return 
             named=bool(arguments.settings),
             feedback=sys.stderr,
         )
+    if arguments.command == "test":
+        # Imported here: only this command starts the project's hooks, and the
+        # guard, which runs on every call, should not load what does it.
+        from . import _guard_test  # noqa: PLC0415
+
+        project = Path.cwd()
+        env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project)}
+        return _guard_test.command(
+            [Path(path) for path in arguments.settings]
+            if arguments.settings
+            else _hook_files(CLAUDE_CODE, project),
+            project=project,
+            expect=arguments.expect or [],
+            out=sys.stdout,
+            run=partial(_guard_test.run_handler, project=project, env=env),
+            # Where Claude Code's docs put file-based managed settings, and where
+            # macOS keeps a configuration profile's preferences.
+            managed=[
+                Path("/Library/Application Support/ClaudeCode/managed-settings.json"),
+                Path("/Library/Application Support/ClaudeCode/managed-settings.d"),
+                Path("/Library/Managed Preferences/com.anthropic.claudecode.plist"),
+                # A profile scoped to one user lands in that user's folder.
+                *_guard_test.user_profiles(
+                    Path("/Library/Managed Preferences"),
+                    "com.anthropic.claudecode.plist",
+                ),
+                Path("/etc/claude-code/managed-settings.json"),
+                Path("/etc/claude-code/managed-settings.d"),
+            ],
+            named=bool(arguments.settings),
+        )
     directory = Path(arguments.dir)
     if arguments.command in {"replay", "learn"}:
         # Claude Code keeps every project's sessions here. Unless told otherwise,
@@ -118,7 +152,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return 
         paths = [Path(path) for path in arguments.paths]
         return from_history(
             arguments.command,
-            paths=paths or [Path.home() / ".claude" / "projects"],
+            paths=paths or [_claude_home() / "projects"],
             within=None if paths else Path(os.path.abspath(directory)).parent,
             directory=directory,
             agent=arguments.agent,
@@ -203,7 +237,9 @@ def _manage(command: str, directory: Path, policy: Path | None) -> int:
 
 
 def _hook_files(harness: Harness, project: Path) -> list[Path]:
-    """Every file the agent reads a project's hooks from, managed ones aside."""
+    """Every file the agent reads a project's hooks from, managed ones aside,
+    lowest precedence first: ``paveo test`` lets the last say on
+    ``disableAllHooks``."""
     if harness is CODEX:
         own = [project / ".codex" / "hooks.json"]
     elif harness is CURSOR:
@@ -213,7 +249,7 @@ def _hook_files(harness: Harness, project: Path) -> list[Path]:
             project / ".claude" / "settings.json",
             project / ".claude" / "settings.local.json",
         ]
-    return list(dict.fromkeys(own + _global_hook_files(harness)))
+    return list(dict.fromkeys(_global_hook_files(harness) + own))
 
 
 def _global_hook_files(harness: Harness) -> list[Path]:
@@ -222,7 +258,13 @@ def _global_hook_files(harness: Harness) -> list[Path]:
         return [_codex_home() / "hooks.json"]
     if harness is CURSOR:
         return [Path.home() / ".cursor" / "hooks.json"]
-    return [Path.home() / ".claude" / "settings.json"]
+    return [_claude_home() / "settings.json"]
+
+
+def _claude_home() -> Path:
+    """Where Claude Code keeps its own files: ``$CLAUDE_CONFIG_DIR`` when it is
+    set (environment variables page, read 20 Oct 2026), else ~/.claude."""
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
 
 
 def _codex_home() -> Path:
@@ -636,6 +678,18 @@ def _parser() -> argparse.ArgumentParser:
         "doctor", help="name the Claude Code hooks that cannot work as written"
     )
     doctor.add_argument("--settings", action="append", help="settings file to check")
+    test = commands.add_parser(
+        "test", help="run this project's Claude Code hooks against bypass spellings"
+    )
+    test.add_argument(
+        "--expect",
+        action="append",
+        choices=[action.name for action in ACTIONS],
+        help="an action the hooks must stop in every spelling (repeatable)",
+    )
+    test.add_argument(
+        "--settings", action="append", help="settings file, lowest precedence first"
+    )
     return parser
 
 

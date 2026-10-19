@@ -537,3 +537,20 @@ def test_doctor_does_not_ask_when_no_settings_were_found(tmp_path: Path) -> None
     )
     assert "nothing was checked" in out.getvalue()
     assert feedback.getvalue() == ""
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [{"env": {"CI": True}}, {"permissions": {"deny": "Bash(rm:*)"}}, {"hooks": []}],
+)
+def test_a_file_claude_code_rejects_whole_is_unread_not_checked(
+    tmp_path: Path, extra: dict[str, object]
+) -> None:
+    """doctor and test share one reader, so they never disagree about which
+    files Claude Code loads."""
+    path = tmp_path / ".claude" / "settings.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"hooks": _one("PreToolUse", CHE), **extra}))
+    code, out = _doctor(tmp_path, [path])
+    assert code == 2
+    assert "Claude Code rejects such a file whole" in out

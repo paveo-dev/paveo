@@ -54,6 +54,14 @@ Overclaiming is itself a security problem, so:
   written and as the file it reaches through symbolic links when the call is
   judged; a hard link is judged by its own name, and a link swapped in after
   that, before the agent opens the file, is followed. See THREAT_MODEL T10.
+- **`paveo test` runs your project's hooks; nothing else in Paveo does.** It
+  starts each PreToolUse command hook in your Claude Code settings, with your
+  environment and the project as its folder, to see whether it stops bypass
+  spellings of dangerous commands: run it where you would run the project's own
+  tests. The commands it hands a hook are harmless if the hook ran them. A hook
+  still running after 10 seconds is killed with every process it started. It
+  never prints a hook's command or output. A pass means the listed spellings were
+  stopped, not that the guard holds. See THREAT_MODEL T13.
 - **The MCP guard (`paveo mcp`) judges tool calls only, over stdio.** Resources,
   prompts and sampling pass through, a path in a tool's arguments is judged as
   written without following symbolic links, and a client set up to start the server

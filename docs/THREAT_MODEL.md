@@ -296,6 +296,30 @@ apply (T10, D79); the server is the user's program and what
 it does with an allowed call is its own; and a client configured to start the
 server without `paveo mcp` is not guarded, which nothing in Paveo can see.
 
+**T13 · `paveo test` runs a project's hooks** (D102). Unlike `doctor`, it starts
+each PreToolUse command hook in the settings it reads, so it runs whatever those
+hooks run, with the user's environment.
+→ It is a command a person types, never run by the guard or at import (the CLI
+imports it only for `test`, and a test proves the guard does not load it). What
+it hands a hook is harmless if executed: every destructive spelling aims at a
+remote, ref, path or pathspec named `paveo-test-probe` that does not exist (a test
+pins it), and nothing publishes. Each hook gets at most 10 seconds in its own
+process group; one still running is killed with the whole group before it is
+reaped, so the group id cannot belong to anyone else, and an exited hook is never
+signalled. **No answer it cannot be sure of counts as a stop:** a `deny` that
+fails Claude Code's schema (no `hookEventName`), a timeout of ours before the
+hook's own limit, a matcher in regex syntax only Python reads, and settings it
+does not read (managed settings, `if` filters), and a settings file Claude Code
+would reject whole (not strict UTF-8, a byte-order mark, a key it reads of the
+wrong type) each make the run say it could not tell, never pass. A settings file that holds a 400-digit timeout, a matcher nested
+past the parser's limit or a NUL byte in a command is reported, not a crash. Its output is read to 1 MiB and never printed, nor is its command
+(either can hold a token); only file paths are, with control characters escaped.
+`http` hooks are never run, so the command still opens no socket of its own.
+**Not covered:** the hooks are the project's code: a hostile repository's hook
+does what it likes, as its `make test` would, so run it only where you would run
+the project; a background process left by a hook that exited normally is left
+running, as Claude Code leaves it.
+
 **The company rollout hook (D89).** `rollout/guard` runs `paveo guard` with a
 policy from one place and each person's log in another. **Managed mode** trusts
 one root-owned folder, `/opt/paveo`, and nothing outside it: the script, the
