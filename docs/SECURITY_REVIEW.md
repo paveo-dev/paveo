@@ -127,7 +127,8 @@ Stated so your review does not have to discover it:
 - **A coding-agent guard that never runs cannot refuse.** Claude Code and Codex let
   a call through when the hook's binary is missing or the hook times out, and Codex
   runs no hook you have not trusted. The guard refuses at its own 4-second deadline,
-  so leave the hook's timeout at the agent's default, or well above 4 seconds.
+  which starts after Python does, so leave the hook's timeout at the agent's default, or at
+  10 seconds or more (`--selftest` fails anything shorter, D103).
   `paveo guard <agent> --selftest` checks for a missing binary and Codex's trust
   record; it does not read the timeout. Cursor's hooks are written to refuse on a
   crash or timeout.

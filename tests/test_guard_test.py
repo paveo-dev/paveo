@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import signal
 import stat
 import sys
 import time
@@ -23,7 +24,14 @@ import pytest
 import paveo
 from conftest import SENTINEL
 from paveo._bypasses import ACTIONS, ORDINARY
-from paveo._guard_test import Handler, Run, command, run_handler
+from paveo._guard_test import (
+    Handler,
+    Run,
+    _failure_notes,
+    _Tally,
+    command,
+    run_handler,
+)
 
 SOURCE = str(Path(paveo.__file__).parent.parent)
 PROBE = "paveo-test-probe"
@@ -1077,6 +1085,60 @@ def test_a_hook_that_hangs_times_out_and_everything_it_started_ends(
     assert run == Run(None, b"", "did not answer in time", timed_out=True)
     for pid in map(int, pids.read_text().split()):
         assert _gone(pid)
+
+
+def test_a_hook_the_system_will_not_let_us_stop_is_reported_not_a_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A setuid program in the hook's group makes killpg fail with EPERM: in
+    0.1.9 that was a traceback, and the wait after it could last forever."""
+    refused: list[int] = []
+
+    def refuse(pid: int, _signal: int) -> None:
+        refused.append(pid)
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(os, "killpg", refuse)
+    ticks = iter([0.0, 0.0, 99.0, 99.0, 99.0])
+    handler = _script(tmp_path, "sleep 2")
+    started = time.monotonic()
+    run = run_handler(
+        handler,
+        b"{}",
+        project=tmp_path,
+        env=dict(os.environ),
+        clock=lambda: next(ticks, 99.0),
+        pause=lambda _s: None,
+    )
+    assert refused
+    assert run.timed_out
+    assert "could not be stopped" in (run.failure or "")
+    assert time.monotonic() - started < 2  # not waited on
+    monkeypatch.undo()  # the real killpg, so the test leaves nothing running
+    os.killpg(refused[0], signal.SIGKILL)
+
+
+def test_a_capped_hook_left_running_is_said_beside_its_cut_short_line() -> None:
+    """Cut short by paveo test's own limit, and the system would not let it be
+    stopped: the report says both, and never claims what Claude Code would do
+    with a call it never saw answered (the third review of 0.1.10)."""
+    handler = Handler(
+        "settings.json: PreToolUse[0].hooks[0]",
+        lambda _t: True,
+        ("hook",),
+        10.0,
+        blocks_on_failure=False,
+        capped=True,
+    )
+    tally = _Tally()
+    tally.calls[handler.where] = 1
+    tally.timed_out.add(handler.where)
+    tally.cut_short.add(handler.where)
+    tally.left_running.add(handler.where)
+    (note,) = _failure_notes([handler], tally)
+    assert "cannot be told" in note
+    assert "could not be stopped" in note
+    assert "lets a call through" not in note
 
 
 def _gone(pid: int) -> bool:

@@ -781,7 +781,7 @@ cheapest exfiltration channel in the library if it is left open. D26.
 | Audit log unwritable | **Deny** — an unlogged decision did not happen |
 | The Claude Code guard fails in any way: no policy, an unwritable log, input it cannot read, an exception | **Deny**: exit 2. Claude Code treats any other exit as no objection (D49) |
 | The guard takes longer than 4 seconds: a held lock, a slow pattern | **Deny**: it exits 2 at its own deadline, before Claude Code's timeout could let the call through (D49) |
-| The guard cannot run at all: a missing binary, or a hook timeout set below 4 seconds | **Claude Code lets the call through.** Not ours to close; `paveo guard --selftest` detects the first (D49) |
+| The guard cannot run at all: a missing binary, or a hook timeout under 10 seconds (the 4 s deadline starts after Python does) | **Claude Code lets the call through.** Not ours to close; `paveo guard --selftest` detects both (D49, D103) |
 | Codex has not been told to trust the hook, or the project | **Codex never runs it.** `paveo guard codex --selftest` fails on a missing trust record (D57) |
 | A Cursor hook crashes, times out or cannot be found | **Deny**, because `init cursor` sets `failClosed: true`; `--selftest cursor` fails a hook without it (D57) |
 | Agent has `mode: shadow` | A rule's refusal is recorded as `would_deny` and the call proceeds, with a warning **on every call**. Never the budget: every row above still refuses (D48) |

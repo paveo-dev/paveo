@@ -202,8 +202,9 @@ searches a megabyte in quadratic time. **The guard refuses at its own 4-second
 deadline** by exiting 2 from a signal handler. It uses `os._exit`, not an
 exception, because an exception could be caught, or arrive after the answer was
 chosen. Both are tested with real processes. The starter patterns are also
-bounded (`[^\n]{0,100}`, not `.*`). A hook `timeout` set below 4 seconds would
-reopen this, and the README says so. *Found by /code-review, D49.*
+bounded (`[^\n]{0,100}`, not `.*`). A hook `timeout` under 10 seconds would
+reopen this, since the 4 s deadline starts only after Python has started; the README says so
+and `--selftest` fails it (D103). *Found by /code-review, D49.*
 → **`paveo init` run inside a cloned repository** (D50). The repository controls
 every file `init` reads and writes. It writes only real files inside the project
 and refuses if any of them is a symbolic link. Its temporary file gets a fresh

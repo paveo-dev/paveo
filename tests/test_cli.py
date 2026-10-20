@@ -435,12 +435,23 @@ def test_paveo_stop_refuses_the_next_call_through_the_command(
 # --------------------------------------------------------------------------
 
 
-def settings_with(tmp_path: Path, *commands: str) -> Path:
+INIT_MATCHER = "Bash|Write|Edit|NotebookEdit"
+
+
+def settings_with(
+    tmp_path: Path,
+    *commands: str,
+    matcher: str = INIT_MATCHER,
+    fields: dict[str, object] | None = None,
+) -> Path:
     path = tmp_path / "project" / ".claude" / "settings.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    hooks = [{"type": "command", "command": command} for command in commands]
+    hooks = [
+        {"type": "command", "command": command, **(fields or {})}
+        for command in commands
+    ]
     path.write_text(
-        json.dumps({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": hooks}]}}),
+        json.dumps({"hooks": {"PreToolUse": [{"matcher": matcher, "hooks": hooks}]}}),
         encoding="utf-8",
     )
     return path
@@ -482,6 +493,294 @@ def test_selftest_passes_a_hook_that_refuses(tmp_path: Path) -> None:
     code, out = run_selftest(tmp_path, settings)
     assert code == 0, out
     assert out.startswith("ok")
+
+
+@pytest.mark.parametrize(
+    ("matcher", "fields", "said"),
+    [
+        ("Bash", {}, "sees Write, Edit, NotebookEdit"),
+        (INIT_MATCHER, {"async": True}, 'runs in the background ("async")'),
+        (INIT_MATCHER, {"asyncRewake": True}, '("asyncRewake")'),
+        (INIT_MATCHER, {"if": "Bash(git *)"}, 'has an "if" filter'),
+    ],
+)
+def test_selftest_fails_a_hook_claude_code_skips_for_some_calls(
+    tmp_path: Path, matcher: str, fields: dict[str, object], said: str
+) -> None:
+    """The hook refuses when run by hand, but Claude Code never asks it about
+    an edit, never waits for it, or asks it only when the filter matches: in
+    0.1.9 each of these said ok (D102)."""
+    project = tmp_path / "project"
+    (project / ".paveo").mkdir(parents=True)
+    (project / ".paveo" / "policy.json").write_text(json.dumps(POLICY), "utf-8")
+    shim = paveo_shim(tmp_path / "bin")
+    settings = settings_with(
+        tmp_path,
+        f'"{shim}" guard claude-code --dir "$CLAUDE_PROJECT_DIR/.paveo"',
+        matcher=matcher,
+        fields=fields,
+    )
+    code, out = run_selftest(tmp_path, settings)
+    assert code == 1, out
+    assert said in out
+    assert out.startswith("FAIL")
+
+
+@pytest.mark.parametrize(
+    ("fields", "said"),
+    [
+        ({"type": "prompt"}, "has the type 'prompt'"),
+        ({"args": ["--dir", "x"]}, 'has "args"'),
+        ({"timeout": 3}, "has the timeout 3"),
+        ({"timeout": "60"}, "has the timeout '60'"),
+        ({"timeout": True}, "has the timeout True"),
+        ({"timeout": 5}, "has the timeout 5"),  # over 4 s, but Python starts first
+        ({"shell": "powershell"}, "asks for PowerShell"),
+        ({"type": None}, 'Set "type": "command"'),
+    ],
+)
+def test_selftest_fails_a_hook_entry_claude_code_never_lets_decide(
+    tmp_path: Path, fields: dict[str, object], said: str
+) -> None:
+    """Each refuses when run by hand, but Claude Code never runs the command as
+    written, or gives up on it before the guard may answer (the reviews of
+    0.1.10 found these beside async and if)."""
+    project = tmp_path / "project"
+    (project / ".paveo").mkdir(parents=True)
+    (project / ".paveo" / "policy.json").write_text(json.dumps(POLICY), "utf-8")
+    shim = paveo_shim(tmp_path / "bin")
+    settings = settings_with(
+        tmp_path,
+        f'"{shim}" guard claude-code --dir "$CLAUDE_PROJECT_DIR/.paveo"',
+        fields=fields,
+    )
+    code, out = run_selftest(tmp_path, settings)
+    assert code == 1, out
+    assert said in out
+
+
+@pytest.mark.parametrize(
+    ("matcher", "fields"),
+    [
+        (".*", {}),
+        ("^(Bash|Write|Edit|NotebookEdit)$", {}),
+        ("*", {}),
+        (INIT_MATCHER, {"timeout": 30}),
+    ],
+)
+def test_selftest_passes_wiring_that_reaches_every_call(
+    tmp_path: Path, matcher: str, fields: dict[str, object]
+) -> None:
+    """Claude Code reads a matcher that is not plain names as a regular
+    expression, so these reach every call: a false FAIL here is how a team
+    learns to ignore the check."""
+    project = tmp_path / "project"
+    (project / ".paveo").mkdir(parents=True)
+    (project / ".paveo" / "policy.json").write_text(json.dumps(POLICY), "utf-8")
+    shim = paveo_shim(tmp_path / "bin")
+    settings = settings_with(
+        tmp_path,
+        f'"{shim}" guard claude-code --dir "$CLAUDE_PROJECT_DIR/.paveo"',
+        matcher=matcher,
+        fields=fields,
+    )
+    code, out = run_selftest(tmp_path, settings)
+    assert code == 0, out
+
+
+def _two_groups(
+    tmp_path: Path, first: dict[str, object], second: dict[str, object]
+) -> Path:
+    path = tmp_path / "project" / ".claude" / "settings.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"hooks": {"PreToolUse": [first, second]}}), "utf-8")
+    return path
+
+
+def _selftest_answering(tmp_path: Path, settings: Path) -> tuple[int, str]:
+    """The self-test with every hook answering as a working guard does, so only
+    the wiring decides."""
+    out = io.StringIO()
+    code = selftest(
+        CLAUDE_CODE,
+        hook_files=[settings],
+        project=tmp_path / "project",
+        run=lambda _argv, _where: (2, NOT_A_CALL),
+        confirm=lambda _program: False,
+        out=out,
+    )
+    return code, out.getvalue()
+
+
+def test_a_skipped_paveo_hook_beside_a_sound_one_does_not_fail(tmp_path: Path) -> None:
+    """Every call still reaches the sound hook, so the extra one costs nothing."""
+    shim = paveo_shim(tmp_path / "bin")
+    command = f'"{shim}" guard claude-code --dir "$CLAUDE_PROJECT_DIR/.paveo"'
+    sound = {
+        "matcher": INIT_MATCHER,
+        "hooks": [{"type": "command", "command": command}],
+    }
+    extra = {
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": command, "async": True}],
+    }
+    code, out = _selftest_answering(tmp_path, _two_groups(tmp_path, sound, extra))
+    assert code == 0, out
+
+
+def test_two_paveo_hooks_that_split_the_tools_between_them_pass(
+    tmp_path: Path,
+) -> None:
+    """Every governed call reaches one of them, so neither alone is a fault."""
+    shim = paveo_shim(tmp_path / "bin")
+    command = f'"{shim}" guard claude-code --dir "$CLAUDE_PROJECT_DIR/.paveo"'
+    entry = [{"type": "command", "command": command}]
+    shell = {"matcher": "Bash", "hooks": entry}
+    files = {"matcher": "Write|Edit|NotebookEdit", "hooks": entry}
+    code, out = _selftest_answering(tmp_path, _two_groups(tmp_path, shell, files))
+    assert code == 0, out
+
+
+def test_args_set_to_null_is_no_exec_form(tmp_path: Path) -> None:
+    """``paveo test`` reads ``"args": null`` as absent; so must the self-test."""
+    shim = paveo_shim(tmp_path / "bin")
+    command = f'"{shim}" guard claude-code --dir "$CLAUDE_PROJECT_DIR/.paveo"'
+    entry = [{"type": "command", "command": command, "args": None}]
+    sound = {"matcher": INIT_MATCHER, "hooks": entry}
+    code, out = _selftest_answering(tmp_path, _two_groups(tmp_path, sound, sound))
+    assert code == 0, out
+
+
+def test_selftest_fails_when_no_paveo_hook_reads_this_project(tmp_path: Path) -> None:
+    """A hook that works, for another folder's policy, guards nothing here: in
+    the first 0.1.10 draft this passed (the second review)."""
+    shim = paveo_shim(tmp_path / "bin")
+    there = f'"{shim}" guard claude-code --dir {tmp_path}/elsewhere/.paveo'
+    other = {"matcher": INIT_MATCHER, "hooks": [{"type": "command", "command": there}]}
+    code, out = _selftest_answering(tmp_path, _two_groups(tmp_path, other, other))
+    assert code == 1, out
+    assert "reads" in out
+    assert "Run `paveo init claude-code` here" in out
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        '--dir "$CLAUDE_PROJECT_DIR/sub/.paveo"',
+        '--policy "$CLAUDE_PROJECT_DIR/other.json"',
+        "--dir {elsewhere}",
+    ],
+)
+def test_a_hook_reading_another_policy_does_not_count_as_guarding_here(
+    tmp_path: Path, options: str
+) -> None:
+    """The variable anywhere in the command used to count as this project; the
+    folder or policy it names is what counts (the third review of 0.1.10)."""
+    shim = paveo_shim(tmp_path / "bin")
+    there = f'"{shim}" guard claude-code ' + options.format(
+        elsewhere=tmp_path / "elsewhere" / ".paveo"
+    )
+    other = {"matcher": INIT_MATCHER, "hooks": [{"type": "command", "command": there}]}
+    code, out = _selftest_answering(tmp_path, _two_groups(tmp_path, other, other))
+    assert code == 1, out
+    assert "Run `paveo init claude-code` here" in out
+
+
+@pytest.mark.parametrize("option", ["--dir={elsewhere}", "--di {elsewhere}"])
+def test_init_does_not_keep_a_hook_whose_dir_is_spelled_another_way(
+    tmp_path: Path, option: str
+) -> None:
+    """argparse reads --dir=X and the abbreviation --di as --dir: a hook that
+    names another folder that way guards there, so init adds one for here."""
+    project = tmp_path / "project"
+    (project / ".claude").mkdir(parents=True)
+    shim = paveo_shim(tmp_path / "bin")
+    there = f"{shim} guard claude-code " + option.format(
+        elsewhere=tmp_path / "elsewhere" / ".paveo"
+    )
+    entry = {"type": "command", "command": there}
+    shared = project / ".claude" / "settings.json"
+    shared.write_text(
+        json.dumps(
+            {"hooks": {"PreToolUse": [{"matcher": INIT_MATCHER, "hooks": [entry]}]}}
+        ),
+        encoding="utf-8",
+    )
+    _code, out = run_init(project, shim)
+    assert "guards another folder" in out
+    assert "added     the hook" in out
+    # Its own check then fails the other hook, which it will not run as written.
+    assert "not run: arguments other than --dir and --agent" in out
+
+
+def test_every_fault_of_a_hook_is_named_in_one_run(tmp_path: Path) -> None:
+    """One run shows every fix, not one per run (the third review of 0.1.10)."""
+    shim = paveo_shim(tmp_path / "bin")
+    command = f'"{shim}" guard claude-code --dir "$CLAUDE_PROJECT_DIR/.paveo"'
+    entry = {"command": command, "if": "Bash(*)", "timeout": 3}
+    group = {"matcher": "Bash", "hooks": [entry]}
+    code, out = _selftest_answering(tmp_path, _two_groups(tmp_path, group, group))
+    assert code == 1, out
+    assert 'Set "type": "command"' in out
+    assert 'Remove "if"' in out
+    assert "has the timeout 3" in out
+    assert "sees Bash, Write, Edit, NotebookEdit" in out  # no sound hook sees any
+
+
+def test_a_paveo_hook_for_another_folder_is_not_judged_here(tmp_path: Path) -> None:
+    """A Bash-only paveo hook that reads another project's policy guards there,
+    not here: init does not judge it, and the self-test must not either."""
+    shim = paveo_shim(tmp_path / "bin")
+    here = f'"{shim}" guard claude-code --dir "$CLAUDE_PROJECT_DIR/.paveo"'
+    there = f'"{shim}" guard claude-code --dir {tmp_path}/elsewhere/.paveo'
+    sound = {"matcher": INIT_MATCHER, "hooks": [{"type": "command", "command": here}]}
+    other = {"matcher": "Bash", "hooks": [{"type": "command", "command": there}]}
+    code, out = _selftest_answering(tmp_path, _two_groups(tmp_path, sound, other))
+    assert "sees" not in out
+    assert code == 0, out
+
+
+def test_selftest_does_not_judge_claude_code_fields_on_another_agent(
+    tmp_path: Path,
+) -> None:
+    """The fields "async" and "if" are Claude Code's; what Codex does with them
+    is unread, so a Codex hook carrying one is not failed for it."""
+    project = tmp_path / "project"
+    hooks = project / ".codex" / "hooks.json"
+    hooks.parent.mkdir(parents=True)
+    entry = {"type": "command", "command": "paveo guard codex", "async": True}
+    group = {"matcher": "^(?:Bash|apply_patch)$", "hooks": [entry]}
+    hooks.write_text(json.dumps({"hooks": {"PreToolUse": [group]}}), "utf-8")
+    out = io.StringIO()
+    selftest(
+        CODEX,
+        hook_files=[hooks],
+        project=project,
+        run=lambda _argv, _where: (2, NOT_A_CALL),
+        confirm=lambda _program: False,
+        out=out,
+    )
+    assert "background" not in out.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("fields", "said"),
+    [({"async": True}, "runs in the background"), ({"if": "Bash(*)"}, '"if" filter')],
+)
+def test_init_refuses_a_kept_paveo_hook_claude_code_skips(
+    tmp_path: Path, fields: dict[str, object], said: str
+) -> None:
+    """init keeps a paveo hook already there; one Claude Code skips must not be
+    kept and reported as the guard being on."""
+    project = tmp_path / "project"
+    (project / ".claude").mkdir(parents=True)
+    local = project / ".claude" / "settings.local.json"
+    entry = {"type": "command", "command": "paveo guard claude-code", **fields}
+    group = {"matcher": INIT_MATCHER, "hooks": [entry]}
+    local.write_text(json.dumps({"hooks": {"PreToolUse": [group]}}), encoding="utf-8")
+    code, out = run_init(project, paveo_shim(tmp_path / "bin"))
+    assert code == 1, out
+    assert said in out
 
 
 def test_selftest_fails_a_hook_whose_binary_is_gone(tmp_path: Path) -> None:
@@ -1197,7 +1496,9 @@ def test_init_refuses_a_kept_hook_that_never_sees_edits(tmp_path: Path) -> None:
             "PreToolUse": [
                 {
                     "matcher": "Bash",
-                    "hooks": [{"command": f"{shim} guard claude-code"}],
+                    "hooks": [
+                        {"type": "command", "command": f"{shim} guard claude-code"}
+                    ],
                 }
             ]
         }
@@ -1209,7 +1510,7 @@ def test_init_refuses_a_kept_hook_that_never_sees_edits(tmp_path: Path) -> None:
     code, out = run_init(project, shim)
 
     assert code == 1
-    assert "never reach it" in out
+    assert "sees Write, Edit, NotebookEdit" in out
     assert not (project / ".paveo").exists()
 
 
@@ -1228,7 +1529,7 @@ def test_init_finds_a_hook_in_the_shared_settings_and_adds_no_second(
             "PreToolUse": [
                 {
                     "matcher": "Bash|Write|Edit|NotebookEdit",
-                    "hooks": [{"command": hook_command}],
+                    "hooks": [{"type": "command", "command": hook_command}],
                 }
             ]
         }

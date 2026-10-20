@@ -44,7 +44,7 @@ import os
 import re
 import shlex
 import stat
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TextIO
@@ -357,6 +357,52 @@ PERMISSION_MODES = {
     "auto": False,
     "bypassPermissions": False,
 }
+
+
+# Matchers, as Claude Code reads them (``paveo test`` and ``--selftest``): an
+# exact matcher is a list of names; anything else is an unanchored regex.
+_NAMES_ONLY = re.compile(r"[A-Za-z0-9_\- ,|]*")
+# Claude Code tests a matcher as a JavaScript regex. Python reads these, and
+# JavaScript refuses them or reads them as something else: inline flags, named
+# groups written Python's way, comments, atomic groups, conditionals, \A or \Z
+# for the ends (and 3.14's \z), \a, \N{...} and \U escapes, possessive
+# quantifiers and ``{,n}``.
+# Each needs an even run of backslashes before it, none included, or what
+# follows a backslash is escaped and means the same in both.
+_PYTHON_ONLY = re.compile(
+    r"(?<!\\)(?:\\\\)*(?:"
+    r"\(\?(?:P|#|>|\(|[aiLmsux]*-[aiLmsux]*:|[aiLmsux]+[:)])"
+    r"|\\[AZaNUz]|[*+?}]\+|\{,)"
+)
+
+
+def reaches_tools(matcher: object) -> tuple[Callable[[str], bool], str | None]:
+    """Which tool names a group's matcher reaches, as the reference's matcher
+    table says; a matcher that cannot be read reaches everything, untested."""
+    if matcher is None or matcher in (
+        "",
+        "*",
+    ):  # a tuple: a list matcher is not hashable
+        return (lambda _tool: True), None
+    if not isinstance(matcher, str):
+        return (lambda _tool: True), "its matcher is not text"
+    if _NAMES_ONLY.fullmatch(matcher):
+        names = {name.strip() for name in re.split(r"[|,]", matcher)}
+        return names.__contains__, None
+    unread = (lambda _tool: True), "its matcher is not a pattern paveo test can read"
+    if _PYTHON_ONLY.search(matcher):
+        return unread
+    try:
+        pattern = re.compile(matcher)
+    except (re.error, RecursionError, OverflowError):
+        return unread
+    return (lambda tool: pattern.search(tool) is not None), None
+
+
+def runs_in_background(entry: dict[str, object]) -> bool:
+    """Whether Claude Code runs this hook entry without waiting for it, so it
+    can stop nothing. One rule for ``paveo test`` and ``--selftest``."""
+    return entry.get("async") is True or entry.get("asyncRewake") is True
 
 
 def misshapen(settings: dict[str, object]) -> str | None:

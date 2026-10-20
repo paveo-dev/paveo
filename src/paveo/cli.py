@@ -72,17 +72,14 @@ from ._memory import SessionMemory
 from ._policy_document import load_file
 from ._replay import from_history
 from ._setup import BLOCK as _BLOCK
+from ._setup import GUARD_DEADLINE_S, ask, init, run_hook, selftest
 from ._setup import NOT_A_CALL as _NOT_A_CALL
 from ._setup import POLICY as _POLICY
-from ._setup import ask, init, run_hook, selftest
 from .audit import AuditLog, utc_now
 from .errors import ConfigError, PaveoError, PolicyDenied
 from .session import Identity
 
 _LOG, _STOP = "audit.jsonl", "stop"
-# Well under any hook timeout a person would set, and far over a normal decision
-# (about 60 ms, most of it starting Python and importing; tests/overhead.py).
-_DEADLINE_S = 4.0
 # A Write can carry a whole file. Over this, the call is refused unread.
 _MAX_CALL_BYTES = _mcp.MAX_MESSAGE_BYTES
 _MAX_PRINCIPAL = 128
@@ -198,7 +195,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return 
         )
     if arguments.harness is None:
         _parser().error("say which agent to guard: paveo guard claude-code")
-    _refuse_after(_DEADLINE_S)
+    _refuse_after(GUARD_DEADLINE_S)
     return guard(
         HARNESSES[arguments.harness],
         directory=directory,

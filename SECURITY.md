@@ -45,9 +45,11 @@ Overclaiming is itself a security problem, so:
 - **The coding-agent guard (Claude Code, Codex, Cursor) refuses on any failure
   of its own, but cannot refuse if it never runs.** Claude Code and Codex let a
   call through when a hook is missing or times out, and Codex runs no hook you
-  have not trusted; `paveo guard <agent> --selftest` checks for a missing hook
-  and Codex's trust record, and you should run it. It does not read the hook's
-  timeout: leave it at the default, or well above the guard's 4-second deadline. Cursor's hooks are written with `failClosed`, which Cursor
+  have not trusted; `paveo guard <agent> --selftest` checks for a missing hook,
+  a Claude Code hook skipped for some calls (its matcher, `type`, `args`,
+  `shell`, `async`, `if`, or a `timeout` under 10 seconds), one reading another
+  folder's policy, and
+  Codex's trust record, and you should run it. Cursor's hooks are written with `failClosed`, which Cursor
   documents as refusing the call on a crash or timeout. Its
   patterns are a guard rail against common destructive commands, not a sandbox:
   a determined or disguised command gets past them. A file path is judged as

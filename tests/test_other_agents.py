@@ -334,7 +334,7 @@ def test_init_refuses_a_matcher_that_misses_apply_patch(tmp_path: Path) -> None:
     code, out = run_init(CODEX, project, shim)
 
     assert code == 1
-    assert "never reach it" in out
+    assert "sees apply_patch" in out
 
 
 # --------------------------------------------------------------------------

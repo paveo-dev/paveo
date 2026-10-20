@@ -49,10 +49,8 @@ Paveo opens no socket here; the hooks it runs are the project's own.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
-import re
 import selectors
 import signal
 import subprocess
@@ -64,7 +62,15 @@ from pathlib import Path
 from typing import Literal, TextIO
 
 from ._bypasses import ACTIONS, ORDINARY, Action, Spelling
-from ._doctor import PERMISSION_MODES, _not_json, _settings, _shown, hook_groups
+from ._doctor import (
+    PERMISSION_MODES,
+    _not_json,
+    _settings,
+    _shown,
+    hook_groups,
+    reaches_tools,
+    runs_in_background,
+)
 
 # Claude Code waits up to 600 s for a hook. A test that waited that long per
 # spelling would never be run, so no hook is given longer than this. A hook whose
@@ -75,20 +81,6 @@ _DEFAULT_TIMEOUT_S = 600.0
 # Claude Code finishes reading "shortly after the hook's own process exits".
 _EXIT_GRACE_S = 0.5
 _MAX_OUTPUT = 1 << 20
-# An exact matcher is a list of names; anything else is an unanchored regex.
-_NAMES_ONLY = re.compile(r"[A-Za-z0-9_\- ,|]*")
-# Claude Code tests a matcher as a JavaScript regex. Python reads these, and
-# JavaScript refuses them or reads them as something else: inline flags, named
-# groups written Python's way, comments, atomic groups, conditionals, \A or \Z
-# for the ends (and 3.14's \z), \a, \N{...} and \U escapes, possessive
-# quantifiers and ``{,n}``.
-# Each needs an even run of backslashes before it, none included, or what
-# follows a backslash is escaped and means the same in both.
-_PYTHON_ONLY = re.compile(
-    r"(?<!\\)(?:\\\\)*(?:"
-    r"\(\?(?:P|#|>|\(|[aiLmsux]*-[aiLmsux]*:|[aiLmsux]+[:)])"
-    r"|\\[AZaNUz]|[*+?}]\+|\{,)"
-)
 # The fields of PreToolUse's own output besides the decision, and their types.
 _SPECIFIC: dict[str, type] = {
     "permissionDecision": str,
@@ -116,6 +108,7 @@ _PERMISSION: dict[str, Decision] = {
 # The deprecated top-level field: approve is allow, block is deny.
 _LEGACY: dict[str, Decision] = {"block": "block", "approve": "none"}
 _TIMED_OUT = "did not answer in time"
+_LEFT_RUNNING = "could not be stopped (the system refused), so it was left running"
 _ASK_STOPS = {mode for mode, stops in PERMISSION_MODES.items() if stops}
 
 
@@ -176,6 +169,9 @@ class _Tally:
     # Of those, the ones stopped by paveo test's limit before their own: what
     # they would have answered cannot be told, so it is no failure either.
     cut_short: set[str] = field(default_factory=set)
+    # Of those, the ones the system would not let us stop (D103); an uncapped
+    # one says so in its failure line instead.
+    left_running: set[str] = field(default_factory=set)
 
 
 Runner = Callable[[Handler, bytes], Run]
@@ -380,6 +376,8 @@ def _verdict(
             tally.timed_out.add(handler.where)
         if answer.timed_out and handler.capped:
             tally.cut_short.add(handler.where)
+            if answer.failure == _LEFT_RUNNING:
+                tally.left_running.add(handler.where)
             decision: Decision = "unknown"
             failure: str | None = None
         else:
@@ -508,6 +506,11 @@ def _failure_notes(handlers: Sequence[Handler], tally: _Tally) -> list[str]:
     notes.extend(
         f"{handler.where} did not answer within paveo test's 10 s, before its own "
         "time limit, so what it decides cannot be told; it was not run again"
+        + (
+            ", and it could not be stopped (the system refused), so it was left running"
+            if handler.where in tally.left_running
+            else ""
+        )
         for handler in handlers
         if handler.where in tally.cut_short
     )
@@ -574,12 +577,12 @@ def _read_hooks(path: Path, hooks: object, *, project: Path, found: _Found) -> N
         if not isinstance(group, dict) or not isinstance(entries, list):
             found.unread.append(f"{path}: PreToolUse[{g}] has no list of hooks")
             continue
-        reaches, unreadable = _reaches(group.get("matcher"))
+        reaches, unreadable = reaches_tools(group.get("matcher"))
         for h, entry in enumerate(entries):
             where = f"{path}: PreToolUse[{g}].hooks[{h}]"
             if not isinstance(entry, dict):
                 found.unread.append(f"{where} is not an object")
-            elif entry.get("async") is True or entry.get("asyncRewake") is True:
+            elif runs_in_background(entry):
                 found.notes.append(f"{where} runs in the background: it stops nothing")
             elif (
                 same := json.dumps([group.get("matcher"), entry], sort_keys=True)
@@ -692,29 +695,6 @@ def _named(spelling: Spelling) -> str:
     )
 
 
-def _reaches(matcher: object) -> tuple[Callable[[str], bool], str | None]:
-    """Which tool names a group's matcher reaches, as the reference's matcher
-    table says; a matcher that cannot be read reaches everything, untested."""
-    if matcher is None or matcher in (
-        "",
-        "*",
-    ):  # a tuple: a list matcher is not hashable
-        return (lambda _tool: True), None
-    if not isinstance(matcher, str):
-        return (lambda _tool: True), "its matcher is not text"
-    if _NAMES_ONLY.fullmatch(matcher):
-        names = {name.strip() for name in re.split(r"[|,]", matcher)}
-        return names.__contains__, None
-    unread = (lambda _tool: True), "its matcher is not a pattern paveo test can read"
-    if _PYTHON_ONLY.search(matcher):
-        return unread
-    try:
-        pattern = re.compile(matcher)
-    except (re.error, RecursionError, OverflowError):
-        return unread
-    return (lambda tool: pattern.search(tool) is not None), None
-
-
 # --------------------------------------------------------------------------
 # Running a hook
 # --------------------------------------------------------------------------
@@ -760,15 +740,35 @@ def run_handler(  # noqa: PLR0913 - the clock and pause are injected (Rule 14)
         os.close(call_in)
         os.close(answer_out)
     try:
-        return _answer(process, answer_in, handler.timeout, clock=clock, pause=pause)
+        answer = _answer(process, answer_in, handler.timeout, clock=clock, pause=pause)
     finally:
         os.close(answer_in)
-        if process.poll() is None:
-            # Not reaped, so the group id is still the hook's own. It can hold
-            # nothing but processes that have exited and wait to be reaped.
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
+        stopped = _stop(process)
+    if not stopped:
+        return Run(None, b"", _LEFT_RUNNING, timed_out=True)
+    return answer
+
+
+def _stop(process: subprocess.Popen[bytes]) -> bool:
+    """End a hook still running, with everything it started; ``False`` when the
+    system refuses. ``killpg`` fails with EPERM only when no process in the
+    group may be signalled (the hook itself runs as another user, setuid), and
+    waiting for it could take forever, so it is left running and said, never a
+    traceback (D102). One such process among others that die is not seen.
+
+    Left unreaped on purpose: reaping is waiting."""
+    if process.poll() is not None:
+        return True
+    try:
+        # Not reaped, so the group id is still the hook's own. It can hold
+        # nothing but processes that have exited and wait to be reaped.
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        return False
+    process.wait()
+    return True
 
 
 def _answer(

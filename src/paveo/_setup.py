@@ -29,8 +29,16 @@ from importlib import resources
 from pathlib import Path
 from typing import TextIO
 
-from ._doctor import misshapen, parse_settings
-from ._harnesses import CLAUDE_CODE, CODEX, CURSOR, Harness, for_policy, real_paths
+from ._doctor import misshapen, parse_settings, reaches_tools, runs_in_background
+from ._harnesses import (
+    CLAUDE_CODE,
+    CODEX,
+    CURSOR,
+    Event,
+    Harness,
+    for_policy,
+    real_paths,
+)
 from ._licence import DEVELOPER, LICENCE_FILE, Plan, apply, plan_in
 from ._policy_document import load_document, load_file
 from .audit import utc_now
@@ -42,6 +50,13 @@ _FRESH = Recall(now=0.0, footprints=frozenset(), calls=())
 
 # Every agent's contract: exit 2 blocks. Anything else may not.
 BLOCK = 2
+# The guard refuses a call it has not decided by then. Well under any hook
+# timeout a person would set, and far over a normal decision (about 60 ms, most
+# of it starting Python and importing; tests/overhead.py).
+GUARD_DEADLINE_S = 4.0
+# A hook timeout shorter than this can end before the guard answers: the 4 s
+# timer starts only once Python has started and imported (D103).
+_MIN_HOOK_TIMEOUT_S = 10.0
 POLICY = "policy.json"
 # `--selftest` sends a call the guard cannot read and expects this refusal back:
 # only a guard that started, loaded its policy and opened its log gets this far.
@@ -51,6 +66,15 @@ _SELFTEST_TIMEOUT_S = 30
 _PROJECT_VARIABLE = re.compile(r"\$\{CLAUDE_PROJECT_DIR\}|\$CLAUDE_PROJECT_DIR\b")
 _OPERATORS = ";&|<>()"
 _GUARD_OPTIONS = frozenset({"--dir", "--agent"})
+# Every option `paveo guard` takes, for reading an abbreviation as argparse does.
+_GUARD_ALL_OPTIONS = (
+    "--dir",
+    "--agent",
+    "--policy",
+    "--selftest",
+    "--settings",
+    "--help",
+)
 # The log, the stop file and a licence key are this machine's, never the
 # repository's: a key committed to a public repository is anyone's (D62).
 # At most this many agent names from a policy file go into a refusal.
@@ -69,6 +93,9 @@ class _Hook:
     matcher: object
     command: str
     fail_closed: bool
+    # What in the entry keeps Claude Code from asking it about every call, read
+    # whatever the agent but judged for Claude Code only (``_skipped``).
+    wiring: tuple[str, ...]
 
 
 def init(  # noqa: PLR0913 - keyword-only; the files and the process runner are injected
@@ -250,15 +277,11 @@ def _plan_hook(
             )
             return None
     found = _hooks_for(harness, documents, target.parent.parent / ".paveo", out)
-    for hook in found:
-        event = next(event for event in harness.events if event.name == hook.event)
-        if not _covers(harness, hook.matcher, event.reaches):
-            out.write(
-                f"FAIL the paveo {hook.event} hook in {hook.source} has the matcher "
-                f"{hook.matcher!r}, so some calls the policy governs never reach "
-                f"it. Set it to {event.matcher or 'nothing'!r}.\n"
-            )
-            return None
+    unguarded = _unguarded(harness, found)
+    for reason in unguarded:
+        out.write(f"FAIL {reason}\n")
+    if unguarded:
+        return None
     # Only the events with no paveo hook yet get one: Cursor has two, and a
     # person who removed one must get it back by running init again.
     missing = frozenset(
@@ -655,10 +678,113 @@ def _policy_weakness(
     return None
 
 
+def _unguarded(harness: Harness, hooks: Sequence[_Hook]) -> list[str]:
+    """For each event with a paveo hook, why the hooks the agent waits for do not
+    reach every call the policy governs; empty when they do. Running a hook by
+    hand cannot show this, since it refuses the same however it is wired, so
+    ``init`` and ``--selftest`` both read it here. The hooks are judged
+    together: a skipped extra beside a sound hook costs nothing, and two whose
+    matchers split the tools between them guard every call. Every fault of every
+    hook is named at once, so one run shows every fix. An event with no paveo
+    hook at all is ``_agent_problems``'s to name."""
+    reasons: list[str] = []
+    for event in harness.events:
+        mine = [hook for hook in hooks if hook.event == event.name]
+        sound = [hook for hook in mine if not hook.wiring]
+        if not mine or _reached(harness, sound, event):
+            continue
+        reasons.extend(
+            f"the paveo {hook.event} hook in {hook.source} {fault}"
+            for hook in mine
+            for fault in hook.wiring
+        )
+        missed = [
+            tool
+            for tool in event.reaches or ()
+            if not any(_covers(harness, hook.matcher, (tool,)) for hook in sound)
+        ]
+        where = ", ".join(sorted({str(hook.source) for hook in mine}))
+        reasons.append(
+            f"no paveo {event.name} hook {harness.title} waits for in {where} "
+            + (
+                f"sees {', '.join(missed)}: add them to its matcher, as in "
+                f"{event.matcher!r}."
+                if missed
+                else "sees every call: set its matcher to "
+                f"{event.matcher or 'nothing'!r}."
+            )
+        )
+    return reasons
+
+
+def _reached(harness: Harness, hooks: Sequence[_Hook], event: Event) -> bool:
+    """Whether every call the policy governs reaches at least one of ``hooks``."""
+    if event.reaches is None:
+        return any(_covers(harness, hook.matcher, None) for hook in hooks)
+    return all(
+        any(_covers(harness, hook.matcher, (tool,)) for hook in hooks)
+        for tool in event.reaches
+    )
+
+
+def _wiring(entry: dict[str, object]) -> tuple[str, ...]:
+    """Every fault in a Claude Code hook entry that keeps its command from
+    deciding every call, from the hooks reference, each with its fix; empty when
+    there is none. Codex's and Cursor's fields are unread, so they are not
+    judged (Rule 3).
+
+    The same rules as ``paveo test``'s ``_handler`` where both read a field;
+    where they differ it is on purpose: ``paveo test`` reports a hook it cannot
+    run as untestable, this fails one Paveo itself must run."""
+    kind = entry.get("type")
+    timeout = entry.get("timeout")
+    too_short = timeout is not None and not (
+        isinstance(timeout, int | float)
+        and not isinstance(timeout, bool)
+        and timeout >= _MIN_HOOK_TIMEOUT_S
+    )
+    background = "async" if entry.get("async") is True else "asyncRewake"
+    checks = (
+        (
+            kind != "command",
+            f"has {f'the type {kind!r}' if 'type' in entry else 'no type'}, so "
+            f'Claude Code never runs its command. Set "type": "command".',
+        ),
+        (
+            entry.get("args") is not None,
+            'has "args", so Claude Code runs the command as one program name. '
+            'Remove "args".',
+        ),
+        (
+            entry.get("args") is None and entry.get("shell") == "powershell",
+            'asks for PowerShell, which the guard does not run on. Remove "shell".',
+        ),
+        (
+            runs_in_background(entry),
+            f'runs in the background ("{background}"), so Claude Code does not '
+            f'wait for it. Remove "{background}" from the hook.',
+        ),
+        (
+            "if" in entry,
+            'has an "if" filter, so Claude Code runs it only for some calls. '
+            'Remove "if" from the hook.',
+        ),
+        (
+            too_short,
+            f"has the timeout {timeout!r}: Claude Code lets the call through if the "
+            f"guard has not answered by then, and with Python starting it can need "
+            f"more than its own {GUARD_DEADLINE_S:g} s. Set it to "
+            f"{_MIN_HOOK_TIMEOUT_S:g} or more, or remove it.",
+        ),
+    )
+    return tuple(why for wrong, why in checks if wrong)
+
+
 def _covers(harness: Harness, matcher: object, reaches: Sequence[str] | None) -> bool:
-    """Whether a hook's matcher reaches every tool the policy governs. Absent,
-    empty and ``*`` match everything. Claude Code's is tool names joined by |
-    or ,; Codex's and Cursor's a regular expression, searched."""
+    """Whether a hook's matcher reaches every tool in ``reaches`` (``None``:
+    every call). Claude Code's is read as ``paveo test`` reads it (names, else a
+    regular expression); Codex's and Cursor's are a regular expression,
+    searched. Absent, empty and ``*`` match everything."""
     if matcher is None or matcher in (
         "",
         "*",
@@ -667,7 +793,8 @@ def _covers(harness: Harness, matcher: object, reaches: Sequence[str] | None) ->
     if reaches is None or not isinstance(matcher, str):
         return False
     if harness.names_matcher:
-        return set(reaches) <= {part.strip() for part in re.split(r"[|,]", matcher)}
+        reached, unread = reaches_tools(matcher)
+        return unread is None and all(map(reached, reaches))
     try:
         pattern = re.compile(matcher)
     except re.error:
@@ -678,25 +805,47 @@ def _covers(harness: Harness, matcher: object, reaches: Sequence[str] | None) ->
 def _reads(hook: _Hook, home: Path) -> bool:
     """Whether a hook reads the policy in ``home``. A global hook file can hold
     a paveo hook with another project's folder in it: that one guards there, not
-    here (/code-review, D57). Claude Code's hook names the folder by its
-    variable, and a hook with no ``--dir`` reads where the agent runs, so both
-    count. Judged on the words, never by running anything.
+    here (/code-review, D57). ``--dir`` and ``--policy`` are read as argparse
+    reads them (``_option``), with ``$CLAUDE_PROJECT_DIR`` filled in, so
+    ``--dir=/elsewhere``, ``--di`` and ``$CLAUDE_PROJECT_DIR/sub/.paveo`` are
+    judged by the folder they name (the third review of 0.1.10). Judged on the
+    words, never by running anything; a hook with shell syntax is never run.
     """
     words = _words(hook.command, home.parent)
-    if "--dir" not in words or "$CLAUDE_PROJECT_DIR" in hook.command:
-        return True
-    index = words.index("--dir") + 1
+    folder = _option(words, "--dir")
+    policy = _option(words, "--policy")
+    if folder is not None and (home.parent / folder).resolve() != home.resolve():
+        return False
     return (
-        index < len(words) and (home.parent / words[index]).resolve() == home.resolve()
+        policy is None or (home.parent / policy).resolve() == (home / POLICY).resolve()
     )
 
 
 def _agent(harness: Harness, hook: _Hook) -> str:
     """The agent id a hook judges calls as: its ``--agent``, else the agent's
     name. Read from the words; a hook with shell syntax is never run anyway."""
-    words = _words(hook.command, Path("."))
-    index = words.index("--agent") + 1 if "--agent" in words else len(words)
-    return words[index] if index < len(words) else harness.name
+    return _option(_words(hook.command, Path(".")), "--agent") or harness.name
+
+
+def _option(words: Sequence[str], name: str) -> str | None:
+    """The value argparse gives the guard's option ``name``: the last one given,
+    whole, after ``=``, or as an abbreviation no other guard option shares."""
+    value = None
+    for index, word in enumerate(words):
+        if word == "--":  # what follows is no option
+            break
+        flag, equals, rest = word.partition("=")
+        named = (
+            flag.startswith("--")
+            and flag != "--"
+            and name.startswith(flag)
+            and sum(option.startswith(flag) for option in _GUARD_ALL_OPTIONS) == 1
+        )
+        if named and equals:
+            value = rest
+        elif named and index + 1 < len(words):
+            value = words[index + 1]
+    return value
 
 
 def _paveo_hooks_in(
@@ -725,6 +874,7 @@ def _paveo_hooks_in(
                             matcher=group.get("matcher"),
                             command=command,
                             fail_closed=group.get("failClosed") is True,
+                            wiring=_wiring(hook) if harness is CLAUDE_CODE else (),
                         )
                     )
     return found
@@ -774,7 +924,14 @@ def selftest(  # noqa: PLR0913 - keyword-only; the files and the process runner 
                 f"remove it there and run {shlex.quote(program)} init "
                 f"{harness.name} in each.\n"
             )
-    failed = 0
+    # A hook the agent skips refuses perfectly when run by hand, so its wiring is
+    # read first: in 0.1.9 a Bash-only matcher passed while edits went unguarded.
+    # Only hooks that read this project's policy count, as in init.
+    home = project / ".paveo"
+    unguarded = _unguarded(harness, [hook for hook in hooks if _reads(hook, home)])
+    for reason in unguarded:
+        out.write(f"FAIL {reason}\n")
+    failed = len(unguarded)
     for command in dict.fromkeys(hook.command for hook in hooks):
         verdict = _check_hook(
             harness, command, project=project, run=run, confirm=confirm
@@ -858,8 +1015,7 @@ def _agent_problems(
         f"project's policy and `paveo stop` never apply. Run `paveo init "
         f"{harness.name}` here."
         for event in harness.events
-        if harness is not CLAUDE_CODE
-        and not any(hook.event == event.name and _reads(hook, home) for hook in hooks)
+        if not any(hook.event == event.name and _reads(hook, home) for hook in hooks)
     ]
     if harness is CURSOR:
         return problems + [

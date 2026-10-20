@@ -311,7 +311,11 @@ nothing.
 If you move or delete that virtualenv, the hook stops working **silently**:
 Claude Code treats a hook it cannot run as one with no objection. So after any
 change, run `~/.paveo/bin/paveo guard --selftest` in the project. It checks
-every configured hook really refuses, and says so if a paveo hook sits in your
+every configured hook really refuses, fails one Claude Code would skip for some
+calls (a matcher that misses file edits, a `type` other than `"command"`,
+`"args"`, `"shell": "powershell"`, `"async": true`, an `"if"` filter, or a
+`timeout` under 10 seconds),
+and says so if a paveo hook sits in your
 global settings (`~/.claude/settings.json`). There it runs in every project, and
 the hook `init` writes refuses every call in a project with no
 `.paveo/policy.json`.
@@ -324,7 +328,7 @@ the hook `init` writes refuses every call in a project with no
 - **Anything unexpected inside the hook refuses the call, and so does taking
   longer than 4 seconds.** Claude Code lets a call through when a hook fails or
   times out, so the hook never does either. A normal check takes about 60 ms
-  ([Overhead](#overhead)). Leave the hook's `timeout` above 4 seconds.
+  ([Overhead](#overhead)). Leave the hook's `timeout` at 10 seconds or more.
 - **Every decision goes in `.paveo/audit.jsonl`**, hash-chained, and many hooks
   running at once share it safely.
 - Start in shadow mode (`"mode": "shadow"` in the policy) to see what it would
