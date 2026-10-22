@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import KNOWN_GAPS
+from paveo._bypasses import ACTIONS
 from paveo._policy_document import load_file
 from paveo.policy import Footprint, Policy, Recall
 
@@ -49,6 +51,22 @@ def bash(command: str) -> dict[str, object]:
         "rm -rf node_modules",
         "rm -fr /",
         "rm -Rf ./build",
+        # Split flags got past every starter until 0.1.11 (`paveo test`).
+        "rm -r -f build",
+        "rm -r --force build",
+        "rm --force -r build",
+        "rm build -R -f",
+        "find . -delete",
+        "find build -type f -delete",
+        # Padding past a window (/security-review of D106: the old rule held).
+        "rm" + " " * 150 + "-rf ~",
+        "rm" + "\t" * 150 + "-rf ~",
+        # Each got past the D107 rules (the re-review of D107).
+        'rm -r "a;b" -f ~',
+        "rm -r 'x|y' --force ~",
+        "rm -r x\\;y -f ~",
+        "echo `rm -r x -f ~`",
+        "python3 -c \"from shutil import rmtree as d; d('/x')\"",
         "cd /tmp && rm --recursive x",
         "git push --force origin main",
         "git push -f",
@@ -178,6 +196,11 @@ def test_claude_code_refuses_destructive_and_self_disabling_commands(
     [
         "ls -la",
         "rm notes.txt",
+        "rm -f notes.txt",
+        "git rm -r --cached node_modules",
+        "grep -rn TODO src",
+        # --rm is not rm (/code-review of D106).
+        "docker run --rm app pytest -rf",
         "git push origin feature/x",
         "git push origin fix-format",
         "git -C . status",
@@ -222,6 +245,11 @@ def test_claude_code_permits_ordinary_commands(command: str) -> None:
         "git -C . reset --soft HEAD~1 && tail -f log",
         "git -C . clean -n && date +%F",
         "git -C repo push origin main && docker compose -f x.yml up",
+        # rm reads to the end of the line too (D108): a window that stopped at
+        # a separator let `rm -r "a;b" -f ~` through.
+        "rm -f a.lock && grep -rn TODO src",
+        "rm -f x && ls -R",
+        "grep -rn rmtree src",
     ],
 )
 def test_a_flag_later_on_the_line_is_refused_on_purpose(command: str) -> None:
@@ -595,11 +623,34 @@ def test_the_git_rules_0_1_6_shipped_are_kept_verbatim(name: str, tool: str) -> 
 def test_every_agent_refuses_the_same_destructive_commands() -> None:
     """Three copies of one list (a JSON file cannot share one): an edit to one
     that misses the others would leave an agent less guarded (Rule 2)."""
-    destructive = shell_refusals("claude-code", "Bash")[:15]
+    destructive = shell_refusals("claude-code", "Bash")[:22]
     assert destructive[-1] == "\\bmkfs"
     for name, tool in SHELLS:
-        assert shell_refusals(name, tool)[:15] == destructive, name
+        assert shell_refusals(name, tool)[:22] == destructive, name
         assert "\\bpaveo\\s+resume" in shell_refusals(name, tool), name
+
+
+CLAIMED = ("force-push", "delete", "hard-reset", "clean")  # not secrets: README
+
+
+@pytest.mark.parametrize(("name", "tool"), SHELLS)
+def test_every_agent_stops_what_paveo_test_tries(name: str, tool: str) -> None:
+    """Our own guard passes our own test, for every action it claims to stop,
+    but for the gaps the README names: `rm -r -f` and `find -delete` got past
+    all three starters until 0.1.11, unnamed."""
+    assert set(CLAIMED) <= {a.name for a in ACTIONS}  # a rename cannot skip one
+    policy = starter(name)
+    passing: set[str] = set()
+    for action in (a for a in ACTIONS if a.name in CLAIMED):
+        for spelling in action.spellings:
+            text = spelling.text
+            arguments = bash(text) if name == "claude-code" else {"command": text}
+            if policy.evaluate_tool(name, tool, arguments) is None:
+                passing.add(text)
+    assert passing == set(KNOWN_GAPS)
+    readme = (POLICIES.parent.parent.parent / "README.md").read_text("utf-8")
+    for words in KNOWN_GAPS.values():
+        assert words in readme, words
 
 
 @pytest.mark.parametrize(

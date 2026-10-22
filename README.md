@@ -19,7 +19,7 @@ It is open source under Apache-2.0, except the paid audit evidence export
 project with Claude Code hooks, names the ones that cannot work as written, such
 as guards that can never block. (`uvx` comes with
 [uv](https://docs.astral.sh/uv/) and fetches a suitable Python itself.) Then
-`uvx paveo test` sends those hooks 41 spellings of five dangerous actions, the
+`uvx paveo test` sends those hooks 68 spellings of five dangerous actions, the
 way Claude Code sends a call, and names each spelling that gets past them; in CI,
 `--expect` makes the build fail the day a guard stops stopping one
 ([details](#test-the-hooks-you-already-have)).
@@ -380,8 +380,10 @@ to check another file.
 settings files (like `make test`, run it only on a project whose code you would
 run anyway). It sends each one, as the JSON Claude Code sends, every spelling of
 five dangerous actions: a force push, a recursive delete, a hard reset, `git
-clean`, and reading `.env`, 41 in all, such as `git -C . push --force`, `git push
-paveo-test-probe +main`, `\rm -rf`, `find -delete`, `sh -c '...'` and the Read tool. It
+clean`, and reading `.env`, 68 in all, such as `git -C . push --force`, `git push
+paveo-test-probe +main`, `\rm -rf`, `find -delete`, `sh -c '...'`, `eval`, a flag in a
+variable and the Read tool. The list is open: `src/paveo/bypasses.json`, dated, so a
+report says which version it used, and anyone can add a spelling by pull request. It
 reads each answer as Claude Code's hooks reference does: exit 2, a
 `permissionDecision` of `deny` (in a `hookSpecificOutput` that names
 `PreToolUse`, as the schema requires) or the older `decision: block` stops the
@@ -398,6 +400,16 @@ pushes at a remote that does not exist.
 
 ```
 paveo test --expect force-push --expect delete   # in CI: fails on any leak
+```
+
+Or as a GitHub Action, on every pull request (`--json` writes the same results
+for a machine; the Action puts the report in the job summary):
+
+```yaml
+- uses: actions/checkout@v7
+- uses: paveo-dev/paveo@v0.1.11
+  with:
+    expect: force-push delete hard-reset clean
 ```
 
 It prints, per action, how many spellings were stopped and each one that passed
@@ -427,9 +439,10 @@ A stop that relies on `onFailure: "block"` holds on Claude Code v2.1.295 or late
 from plugins are not run yet either; they can stop more too, but one that defers
 would outrank an ask, so with plugins enabled an ask is not counted as a stop. It
 never prints a hook's command or
-output, only where the hook is. Run against Paveo's own starter it reports
-`rm -r -f` and `find -delete` getting past it (below), and `.env` not guarded,
-since `init`'s hook does not watch Read.
+output, only where the hook is. Run against Paveo's own starter it stops every spelling of the four actions the
+starter refuses but the ones "What the guard cannot do" names (a quoted
+verb, a flag or `rm` in a variable, `rm -r` without `-f`), and reports `.env` not
+guarded, since `init`'s hook does not watch Read.
 
 **Codex.** Built against Codex's documented hook contract and its source, and
 **it has refused `rm -rf` in a real session** (macOS, 26 Sep 2026). It checks
@@ -461,7 +474,7 @@ file it is kept out of git; if your team already had one, `init` adds to it and
 says so.
 
 **What the guard cannot do.** It matches patterns in a command. It does not
-understand the shell, so `rm -r -f`, `find -delete`, a command hidden in a variable or an alias,
+understand the shell, so `rm -r` without `-f`, a command hidden in a variable or an alias,
 a script that does the deleting or pushing, a quoted verb (`git 'push'`), an
 abbreviated flag (`git reset --ha`), a line continuation, or `git` given four or
 more words of its own options before `push`, `reset` or `clean`, or a flag more
@@ -470,7 +483,10 @@ within those 100 characters a force flag (`--force`, or a short cluster ending
 in `f`, read without regard to case), a `+` after `push` or `--hard` is refused
 even when it belongs to the next command (`git push && date +%s`, `git -C repo
 push && docker compose -f x.yml up`): the guard reads text, not shell words, and
-leans to refusing. A file the agent writes is judged by
+leans to refusing. So is `rm` followed within 100 characters by a recursive
+and a force flag, even another command's (`rm -f x && grep -rn TODO src`,
+`git rm --cached x && pytest -rf`), and `rmtree` wherever it appears; `find ... -delete` and `find ... -exec rm` are refused whatever they
+match, `*.pyc` files included. A file the agent writes is judged by
 its path as written and by the file it really reaches through symbolic links
 and `..` (a hard link is judged by its own name),
 but a link made after the guard said yes and before the agent opened the file
@@ -548,7 +564,9 @@ plan covers.
 
 **Coding agents across a company are priced per developer**, since each
 engineer's Claude Code, Codex or Cursor guard is one agent and would otherwise
-never leave the free plan: $15 per developer a month, no minimum. One developer
+never leave the free plan: $15 per developer a month, no minimum, up to 25
+developers; a company with more than 25 is on Custom, an annual contract priced
+with it. One developer
 guarding their own machine stays on Developer, free. The company's key adds audit
 evidence from each developer's log, email support, and an hour with us writing the
 policy you roll out to everyone.

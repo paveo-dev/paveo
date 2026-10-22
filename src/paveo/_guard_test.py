@@ -3,7 +3,7 @@ actions, however they are spelled (D102).
 
 ::
 
-    paveo test [--expect ACTION ...] [--settings FILE ...]
+    paveo test [--expect ACTION ...] [--settings FILE ...] [--json FILE]
 
 Each spelling in ``_bypasses`` is sent to every ``PreToolUse`` hook whose matcher
 reaches it, as the JSON Claude Code sends, and each answer is read the way Claude
@@ -57,11 +57,11 @@ import subprocess
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Literal, TextIO
 
-from ._bypasses import ACTIONS, ORDINARY, Action, Spelling
+from ._bypasses import ACTIONS, ORDINARY, VERSION, Action, Spelling
 from ._doctor import (
     PERMISSION_MODES,
     _not_json,
@@ -199,11 +199,13 @@ def command(  # noqa: PLR0913 - each is an input the command line decides
     run: Runner,
     managed: Sequence[Path] = (),
     named: bool = False,
+    record: TextIO | None = None,
 ) -> int:
     """Run every spelling against the hooks in ``files``, lowest precedence
     first, and report; see the module for what each exit means. ``managed``:
     where managed settings may be, which are not read; one that is there makes
-    the run unsure, since it can switch every hook here off."""
+    the run unsure, since it can switch every hook here off. ``record``: where
+    ``--json`` writes the same results for a machine, the list's version with them."""
     found = _find(files, project=project, named=named)
     present = [path for path in managed if _maybe_there(path)]
     for line in found.unread:
@@ -255,30 +257,42 @@ def command(  # noqa: PLR0913 - each is an input the command line decides
         )
     out.writelines(f"  note: {_shown(line)}\n" for line in notes)
     out.write("\n")
-    walked: list[str] = []
+    outcomes = [
+        _outcome(action, results[action.name], expected=action.name in expect)
+        for action in ACTIONS
+    ]
+    walked = [outcome.name for outcome in outcomes if _report(outcome, out)]
     unsure = bool(found.unread or ordinary_stopped or present)
-    stopped_any = False
-    for action in ACTIONS:
-        verdicts = results[action.name]
-        leaks = _report(action, verdicts, expected=action.name in expect, out=out)
-        if leaks:
-            walked.append(action.name)
-        unsure = unsure or "unknown" in verdicts
-        stopped_any = stopped_any or bool({"block", "ask"} & set(verdicts))
+    unsure = unsure or any(outcome.unknown for outcome in outcomes)
+    stopped_any = any(outcome.stopped for outcome in outcomes)
     out.write("\n")
+    code, ending = _ending(walked, unsure=unsure, stopped_any=stopped_any)
+    out.write(f"paveo: {ending}\n")
+    if record is not None:
+        document = {
+            "bypass_list": VERSION,
+            "exit": code,
+            "ending": ending,
+            "hooks": len(handlers),
+            "notes": [_shown(line) for line in notes],
+            "actions": [asdict(outcome) for outcome in outcomes],
+        }
+        record.write(json.dumps(document, indent=2) + "\n")
+    return code
+
+
+def _ending(
+    walked: Sequence[str], *, unsure: bool, stopped_any: bool
+) -> tuple[int, str]:
     if walked:
-        out.write(f"paveo: these get past the hooks: {', '.join(walked)}.\n")
-        return 1
+        return 1, f"these get past the hooks: {', '.join(walked)}."
     if not unsure and not stopped_any:
         # A test of guards that finds none is no pass, --expect or not: this is
         # the day the settings moved or every hook was switched off.
-        out.write("paveo: no hook stops any of these actions.\n")
-        return 1
+        return 1, "no hook stops any of these actions."
     if unsure:
-        out.write("paveo: could not tell for everything, so this is not a pass.\n")
-        return 2
-    out.write("paveo: nothing expected got past the hooks.\n")
-    return 0
+        return 2, "could not tell for everything, so this is not a pass."
+    return 0, "nothing expected got past the hooks."
 
 
 def _notes(
@@ -321,23 +335,42 @@ def _notes(
     return notes
 
 
-def _report(
-    action: Action, verdicts: list[Decision], *, expected: bool, out: TextIO
-) -> bool:
+@dataclass(frozen=True)
+class _Outcome:
+    """One action's result, as the report and ``--json`` both give it."""
+
+    name: str
+    expected: bool
+    spellings: int
+    stopped: int  # asked included
+    asked: int
+    unknown: int
+    passing: tuple[str, ...]
+
+
+def _outcome(action: Action, verdicts: list[Decision], *, expected: bool) -> _Outcome:
+    return _Outcome(
+        name=action.name,
+        expected=expected,
+        spellings=len(verdicts),
+        stopped=sum(v in {"block", "ask"} for v in verdicts),
+        asked=verdicts.count("ask"),
+        unknown=verdicts.count("unknown"),
+        passing=tuple(
+            _named(s)
+            for s, v in zip(action.spellings, verdicts, strict=True)
+            if v == "none"
+        ),
+    )
+
+
+def _report(outcome: _Outcome, out: TextIO) -> bool:
     """Write one action's line; True when it fails the run."""
-    total = len(verdicts)
-    stopped = sum(v in {"block", "ask"} for v in verdicts)
-    asked = verdicts.count("ask")
-    passing = [
-        _named(s)
-        for s, v in zip(action.spellings, verdicts, strict=True)
-        if v == "none"
-    ]
-    unknown = verdicts.count("unknown")
-    head = f"  {action.name:<11} "
-    by_asking = f" ({asked} by asking a person)" if asked else ""
+    total, stopped, unknown = outcome.spellings, outcome.stopped, outcome.unknown
+    head = f"  {outcome.name:<11} "
+    by_asking = f" ({outcome.asked} by asking a person)" if outcome.asked else ""
     if stopped == 0 and not unknown:
-        if not expected:
+        if not outcome.expected:
             out.write(f"{head}not guarded: no hook stops any of {total} spellings\n")
             return False
         out.write(f"{head}EXPECTED, but no hook stops any of {total} spellings\n")
@@ -345,12 +378,12 @@ def _report(
     out.write(f"{head}stopped {stopped} of {total}{by_asking}")
     if unknown:
         out.write(f", could not tell for {unknown}")
-    if not passing:
+    if not outcome.passing:
         out.write("\n")
         return False
-    out.write(f". {len(passing)} pass every hook:\n")
-    out.writelines(f"{' ' * 16}{text}\n" for text in passing)
-    return bool(stopped) or expected
+    out.write(f". {len(outcome.passing)} pass every hook:\n")
+    out.writelines(f"{' ' * 16}{text}\n" for text in outcome.passing)
+    return bool(stopped) or outcome.expected
 
 
 def _verdict(

@@ -12,7 +12,14 @@
               "command": {
                 "not_matches": [
                   "\\brm\\s+-[a-z]*(?:r[a-z]*f|f[a-z]*r)",
+                  "(?:^|[\\s;&|(`\\\\/'\"])rm\\b[^\\n]{0,100}\\s-[a-z]*(?:r[a-z]*f|f[a-z]*r)",
+                  "(?:^|[\\s;&|(`\\\\/'\"])rm\\b[^\\n]{0,100}\\s-[a-z]*r[^\\n]{0,100}\\s(?:-[a-z]*f|--force)",
+                  "(?:^|[\\s;&|(`\\\\/'\"])rm\\b[^\\n]{0,100}\\s(?:-[a-z]*f|--force)[^\\n]{0,100}\\s-[a-z]*r",
                   "\\brm\\s[^\\n]{0,100}--recursive",
+                  "\\bfind\\b[^\\n]{0,100}\\s-delete\\b",
+                  "\\bfind\\b[^\\n]{0,100}\\s-exec(?:dir)?\\s[^\\n]{0,100}\\brm\\b",
+                  "\\brmtree\\b",
+                  "\\bgit\\s+push\\b[^\\n]{0,100}\\s--mirror\\b",
                   "\\bgit\\s+push\\b[^\\n]{0,100}(?:--force|\\s-f\\b)",
                   "\\bgit\\s+reset\\s+--hard",
                   "\\bgit\\s+clean\\s+-[a-z]*f",
@@ -108,7 +115,14 @@
               "command": {
                 "not_matches": [
                   "\\brm\\s+-[a-z]*(?:r[a-z]*f|f[a-z]*r)",
+                  "(?:^|[\\s;&|(`\\\\/'\"])rm\\b[^\\n]{0,100}\\s-[a-z]*(?:r[a-z]*f|f[a-z]*r)",
+                  "(?:^|[\\s;&|(`\\\\/'\"])rm\\b[^\\n]{0,100}\\s-[a-z]*r[^\\n]{0,100}\\s(?:-[a-z]*f|--force)",
+                  "(?:^|[\\s;&|(`\\\\/'\"])rm\\b[^\\n]{0,100}\\s(?:-[a-z]*f|--force)[^\\n]{0,100}\\s-[a-z]*r",
                   "\\brm\\s[^\\n]{0,100}--recursive",
+                  "\\bfind\\b[^\\n]{0,100}\\s-delete\\b",
+                  "\\bfind\\b[^\\n]{0,100}\\s-exec(?:dir)?\\s[^\\n]{0,100}\\brm\\b",
+                  "\\brmtree\\b",
+                  "\\bgit\\s+push\\b[^\\n]{0,100}\\s--mirror\\b",
                   "\\bgit\\s+push\\b[^\\n]{0,100}(?:--force|\\s-f\\b)",
                   "\\bgit\\s+reset\\s+--hard",
                   "\\bgit\\s+clean\\s+-[a-z]*f",

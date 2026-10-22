@@ -15,3 +15,6 @@ include docs/SPEC_V1.md docs/THREAT_MODEL.md docs/PRICES.md docs/SECURITY_REVIEW
 graft plugins
 graft rollout
 include .claude-plugin/marketplace.json
+# The GitHub Action: tests/test_action.py runs it (D106).
+include action.yml
+graft action

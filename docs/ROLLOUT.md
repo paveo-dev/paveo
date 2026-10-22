@@ -157,7 +157,7 @@ use A.
 ## What it does not cover
 
 - **It matches patterns.** It does not understand the shell, so a disguised
-  command (`rm -r -f`, a script that does the deleting, a path written with a
+  command (`rm -r` without `-f`, a script that does the deleting, a path written with a
   wildcard) can get past it. It is a seatbelt, not a sandbox.
 - **The log, the stop file and the session memory are the person's**, in their
   home folder. An agent that gets a command past the patterns can delete them.

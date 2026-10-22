@@ -193,7 +193,7 @@ settings file and dropped every hook in it (claude-code#96987). Nothing inside
 the guard can notice its own absence, so `paveo guard --selftest` after any
 settings change is the check, and the README says to run it.
 → **Disguised destructive commands.** `not_matches` finds patterns; it does not
-parse the shell. `rm -r -f`, `find -delete`, or anything piped into `sh` gets
+parse the shell. `rm -r` without `-f`, `rm` hidden in a variable, or anything piped into `sh` gets
 past it. Stated in the README and in `src/paveo/starters/README.md`.
 → **A guard made slow.** A timed-out hook is a pass, so anything that can keep
 the guard waiting switches it off: an agent holding the audit log's `flock`
@@ -316,6 +316,19 @@ wrong type) each make the run say it could not tell, never pass. A settings file
 past the parser's limit or a NUL byte in a command is reported, not a crash. Its output is read to 1 MiB and never printed, nor is its command
 (either can hold a token); only file paths are, with control characters escaped.
 `http` hooks are never run, so the command still opens no socket of its own.
+→ **The spellings are a data file anyone can propose changes to** (`bypasses.json`,
+D106, D107), so a hostile pull request is in scope. Each spelling is split as
+a shell splits it, and every command on the line must aim at the probe, use
+only words the list already uses (a vocabulary in `_bypasses.py`, so a new
+word is a code change), and use `.`, `main` or a binary's path only where
+they name nothing real; `sh -c` and `eval` lines are judged the same way. A
+file that fails any check stops the run rather than testing fewer spellings. The checks cannot prove a
+command harmless, so a reviewer still reads every change to the file. The guard
+never loads it (a test proves it): a broken list must not crash the guard, since
+Claude Code lets a call through when its hook fails.
+→ **The GitHub Action** (`action.yml`) hands its inputs to the shell only as
+environment variables, never written into the script (a test pins it), checks the
+version it installs is `x.y.z`, and installs into its own virtual environment.
 **Not covered:** the hooks are the project's code: a hostile repository's hook
 does what it likes, as its `make test` would, so run it only where you would run
 the project; a background process left by a hook that exited normally is left

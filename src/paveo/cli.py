@@ -57,7 +57,6 @@ from pathlib import Path
 from typing import BinaryIO, TextIO
 
 from . import _doctor, _mcp, enforce
-from ._bypasses import ACTIONS
 from ._harnesses import (
     CLAUDE_CODE,
     CODEX,
@@ -112,36 +111,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return 
             feedback=sys.stderr,
         )
     if arguments.command == "test":
-        # Imported here: only this command starts the project's hooks, and the
-        # guard, which runs on every call, should not load what does it.
-        from . import _guard_test  # noqa: PLC0415
-
-        project = Path.cwd()
-        env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project)}
-        return _guard_test.command(
-            [Path(path) for path in arguments.settings]
-            if arguments.settings
-            else _hook_files(CLAUDE_CODE, project),
-            project=project,
-            expect=arguments.expect or [],
-            out=sys.stdout,
-            run=partial(_guard_test.run_handler, project=project, env=env),
-            # Where Claude Code's docs put file-based managed settings, and where
-            # macOS keeps a configuration profile's preferences.
-            managed=[
-                Path("/Library/Application Support/ClaudeCode/managed-settings.json"),
-                Path("/Library/Application Support/ClaudeCode/managed-settings.d"),
-                Path("/Library/Managed Preferences/com.anthropic.claudecode.plist"),
-                # A profile scoped to one user lands in that user's folder.
-                *_guard_test.user_profiles(
-                    Path("/Library/Managed Preferences"),
-                    "com.anthropic.claudecode.plist",
-                ),
-                Path("/etc/claude-code/managed-settings.json"),
-                Path("/etc/claude-code/managed-settings.d"),
-            ],
-            named=bool(arguments.settings),
-        )
+        return _test(arguments)
     directory = Path(arguments.dir)
     if arguments.command in {"replay", "learn"}:
         # Claude Code keeps every project's sessions here. Unless told otherwise,
@@ -614,6 +584,66 @@ def _guarded(directory: Path, out: TextIO, policy: Path | None) -> bool:
     return False
 
 
+def _test(arguments: argparse.Namespace) -> int:
+    """``paveo test``. A list that fails its checks, an action it does not have
+    or a --json file that cannot be written exits 2, could not tell: exit 1
+    would say a spelling got past, and nothing was tested."""
+    # Imported here: only this command starts the project's hooks, and the
+    # guard, which runs on every call, should not load what does it.
+    try:
+        from . import _bypasses, _guard_test  # noqa: PLC0415
+    except ConfigError as e:
+        sys.stderr.write(f"paveo: {e}\n")
+        return 2
+    project = Path.cwd()
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project)}
+    names = [action.name for action in _bypasses.ACTIONS]
+    unknown = sorted(set(arguments.expect or []) - set(names))
+    if unknown:
+        sys.stderr.write(
+            f"paveo test: no action {', '.join(unknown)}; --expect takes "
+            f"{', '.join(names)}.\n"
+        )
+        return 2
+    with ExitStack() as stack:
+        try:
+            record = (
+                stack.enter_context(arguments.json.open("w", encoding="utf-8"))
+                if arguments.json
+                else None
+            )
+        except OSError as e:
+            sys.stderr.write(
+                f"paveo test: cannot write {arguments.json} ({type(e).__name__}).\n"
+            )
+            return 2
+        return _guard_test.command(
+            [Path(path) for path in arguments.settings]
+            if arguments.settings
+            else _hook_files(CLAUDE_CODE, project),
+            project=project,
+            expect=arguments.expect or [],
+            out=sys.stdout,
+            run=partial(_guard_test.run_handler, project=project, env=env),
+            # Where Claude Code's docs put file-based managed settings, and where
+            # macOS keeps a configuration profile's preferences.
+            managed=[
+                Path("/Library/Application Support/ClaudeCode/managed-settings.json"),
+                Path("/Library/Application Support/ClaudeCode/managed-settings.d"),
+                Path("/Library/Managed Preferences/com.anthropic.claudecode.plist"),
+                # A profile scoped to one user lands in that user's folder.
+                *_guard_test.user_profiles(
+                    Path("/Library/Managed Preferences"),
+                    "com.anthropic.claudecode.plist",
+                ),
+                Path("/etc/claude-code/managed-settings.json"),
+                Path("/etc/claude-code/managed-settings.d"),
+            ],
+            named=bool(arguments.settings),
+            record=record,
+        )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="paveo", description="Admission control for the calls an agent makes."
@@ -681,8 +711,14 @@ def _parser() -> argparse.ArgumentParser:
     test.add_argument(
         "--expect",
         action="append",
-        choices=[action.name for action in ACTIONS],
-        help="an action the hooks must stop in every spelling (repeatable)",
+        metavar="ACTION",
+        # No choices=: the names come from the list of bypasses, which the guard,
+        # run through this parser on every call, must never have to load.
+        help="force-push, delete, hard-reset, clean or secrets: an action the "
+        "hooks must stop in every spelling (repeatable)",
+    )
+    test.add_argument(
+        "--json", type=Path, metavar="FILE", help="also write the results to FILE"
     )
     test.add_argument(
         "--settings", action="append", help="settings file, lowest precedence first"

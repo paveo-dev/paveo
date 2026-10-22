@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "paveo"
-version = "0.1.10"
+version = "0.1.11"
 description = "One set of rules for every AI coding agent your team runs: Claude Code, Codex and Cursor ask before shell commands and file writes, with a record that proves it."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -71,7 +71,7 @@ where = ["src"]
 # py.typed is data, not code, so it is not installed unless it is named.
 [tool.setuptools.package-data]
 # The starter policies ship in the wheel, so `paveo init` can install one (D50).
-paveo = ["py.typed", "starters/*.json"]
+paveo = ["py.typed", "bypasses.json", "starters/*.json"]
 
 [tool.ruff]
 line-length = 88

@@ -22,8 +22,8 @@ from pathlib import Path
 import pytest
 
 import paveo
-from conftest import SENTINEL
-from paveo._bypasses import ACTIONS, ORDINARY
+from conftest import KNOWN_GAPS, SENTINEL
+from paveo._bypasses import ACTIONS, ORDINARY, VERSION
 from paveo._guard_test import (
     Handler,
     Run,
@@ -36,6 +36,10 @@ from paveo._guard_test import (
 SOURCE = str(Path(paveo.__file__).parent.parent)
 PROBE = "paveo-test-probe"
 ALL = [action.name for action in ACTIONS]
+# Counted from the list, so a spelling added to it breaks no test here.
+SIZE = {action.name: len(action.spellings) for action in ACTIONS}
+CALLS = sum(SIZE.values()) + len(ORDINARY)
+PUSHES, DELETES = SIZE["force-push"], SIZE["delete"]
 
 
 def _settings(
@@ -160,7 +164,7 @@ def test_ask_counts_as_stopped_and_says_a_person_decides(tmp_path: Path) -> None
 
     code, out = _test(tmp_path, [_settings(tmp_path, [_hook()])], _judge(answer), ALL)
     assert code == 0
-    assert "stopped 11 of 11 (11 by asking a person)" in out
+    assert f"stopped {PUSHES} of {PUSHES} ({PUSHES} by asking a person)" in out
 
 
 @pytest.mark.parametrize(
@@ -183,7 +187,7 @@ def test_answers_that_decide_nothing_let_the_call_through(
         ["delete"],
     )
     assert code == 1
-    assert "delete      EXPECTED, but no hook stops any of 10 spellings" in out
+    assert f"delete      EXPECTED, but no hook stops any of {DELETES} spellings" in out
 
 
 @pytest.mark.parametrize(
@@ -244,7 +248,7 @@ def test_a_hook_that_fails_lets_the_call_through_and_is_named(
         tmp_path, [_settings(tmp_path, [_hook()])], _judge(lambda _t: run), ["delete"]
     )
     assert code == 1
-    assert "PreToolUse[0].hooks[0] failed on 43 of 43 calls:" in out
+    assert f"PreToolUse[0].hooks[0] failed on {CALLS} of {CALLS} calls:" in out
     assert reason in out
     assert "Claude Code lets a call through when its hook fails" in out
 
@@ -302,7 +306,7 @@ def test_output_too_long_to_read_cannot_tell_unless_it_exited_2(tmp_path: Path) 
     files = [_settings(tmp_path, [_hook()])]
     code, out = _test(tmp_path, files, _judge(lambda _t: Run(0, None)), ["delete"])
     assert code == 2
-    assert "could not tell for 10" in out
+    assert f"could not tell for {DELETES}" in out
 
     def answer(text: str) -> Run:
         return Run(0, b"") if _ordinary(text) else Run(2, None)
@@ -319,7 +323,8 @@ def test_of_several_hooks_a_stop_from_any_one_counts(tmp_path: Path) -> None:
         return Run(2 if stops else 0, b"")
 
     code, out = _test(tmp_path, files, run)
-    assert "delete      stopped 9 of 10. 1 pass every hook:" in out
+    rm = sum("rm" in s.text for s in ACTIONS[1].spellings)
+    assert f"delete      stopped {rm} of {DELETES}. {DELETES - rm} pass" in out
     assert code == 1
 
 
@@ -333,7 +338,7 @@ def test_a_hook_stopped_before_its_own_limit_cannot_tell(tmp_path: Path) -> None
     files = [_settings(tmp_path, [_hook(timeout=30, onFailure="block")])]
     code, out = _test(tmp_path, files, _timed_out, ALL)
     assert code == 2
-    assert "could not tell for 11" in out
+    assert f"could not tell for {PUSHES}" in out
     assert "did not answer within paveo test's 10 s, before its own time limit" in out
     # It is not said to have stopped anything, nor counted as a failure.
     assert "so each one was stopped" not in out
@@ -409,7 +414,7 @@ def test_defer_beside_an_ask_cannot_tell(tmp_path: Path) -> None:
 
     code, out = _test(tmp_path, files, run, ALL)
     assert code == 2
-    assert "could not tell for 11" in out
+    assert f"could not tell for {PUSHES}" in out
 
 
 def test_an_ask_beside_a_hook_not_run_cannot_tell(tmp_path: Path) -> None:
@@ -421,7 +426,7 @@ def test_an_ask_beside_a_hook_not_run_cannot_tell(tmp_path: Path) -> None:
 
     code, out = _test(tmp_path, files, _judge(answer), ALL)
     assert code == 2
-    assert "could not tell for 11" in out
+    assert f"could not tell for {PUSHES}" in out
 
 
 def test_an_ask_with_plugins_enabled_cannot_tell(tmp_path: Path) -> None:
@@ -764,7 +769,7 @@ def test_a_hook_not_run_does_not_hide_a_stop_from_one_that_is(tmp_path: Path) ->
     code, out = _test(tmp_path, files, _judge(_blocks_all_but_ordinary), ALL)
     # Every spelling is stopped by the command hook, which is known to let the
     # ordinary calls through, so the hook not run changes nothing.
-    assert "stopped 11 of 11" in out
+    assert f"stopped {PUSHES} of {PUSHES}" in out
     assert "is not run: it is a http hook" in out
     assert code == 0
 
@@ -827,7 +832,7 @@ def test_no_settings_fails_even_with_nothing_expected(tmp_path: Path) -> None:
     code, out = _test(tmp_path, [tmp_path / ".claude" / "settings.json"], _never)
     assert code == 1
     assert "no Claude Code settings file found" in out
-    assert "delete      not guarded: no hook stops any of 10 spellings" in out
+    assert f"delete      not guarded: no hook stops any of {DELETES} spellings" in out
     assert "no hook stops any of these actions" in out
 
 
@@ -1258,11 +1263,28 @@ def test_a_guard_written_the_usual_way_is_walked_around(tmp_path: Path) -> None:
     )
     hook.chmod(0o755)
     _settings(project, [_hook('"$CLAUDE_PROJECT_DIR"/.claude/hooks/guard.sh')])
-    code, out = _main(project, home, "--expect", "delete")
+    record = tmp_path / "results.json"
+    code, out = _main(project, home, "--expect", "delete", "--json", str(record))
     assert code == 1, out
-    assert "force-push  stopped 1 of 11. 10 pass every hook:" in out
+    caught = sum(s.text.startswith("git push --force") for s in ACTIONS[0].spellings)
+    assert f"force-push  stopped {caught} of {PUSHES}. {PUSHES - caught} pass" in out
     assert "\\rm -rf /paveo-test-probe" in out
     assert "hard-reset  not guarded" in out
+    # The same results for a machine, with the list's version; never the hook's
+    # own output, which can carry a token.
+    results = json.loads(record.read_text())
+    assert (results["exit"], results["bypass_list"]) == (1, VERSION)
+    assert results["ending"] == "these get past the hooks: force-push, delete."
+    push, delete = results["actions"][:2]
+    assert (push["stopped"], push["spellings"]) == (caught, PUSHES)
+    assert "\\rm -rf /paveo-test-probe" in delete["passing"]
+    assert delete["expected"] is True
+    assert "blocked" not in record.read_text()
+
+
+def test_an_action_the_list_does_not_have_is_refused(tmp_path: Path) -> None:
+    code, _ = _main(tmp_path, tmp_path, "--expect", "publish")
+    assert code == 2  # argparse's usage error, before any hook is run
 
 
 def test_our_own_starter_and_the_gaps_the_readme_names(tmp_path: Path) -> None:
@@ -1294,17 +1316,16 @@ def test_our_own_starter_and_the_gaps_the_readme_names(tmp_path: Path) -> None:
         "hard-reset",
         "--expect",
         "clean",
+        "--expect",
+        "delete",
     )
-    assert "force-push  stopped 11 of 11" in out
-    assert "hard-reset  stopped 6 of 6" in out
-    assert "clean       stopped 5 of 5" in out
-    passing = ["rm -r -f /paveo-test-probe", "find /paveo-test-probe -delete"]
-    assert "delete      stopped 8 of 10. 2 pass every hook:" in out
+    clean = SIZE["clean"]
+    assert f"clean       stopped {clean} of {clean}" in out
+    for gap in KNOWN_GAPS:
+        assert gap in out
     readme = (Path(SOURCE).parent / "README.md").read_text()
-    for spelling in passing:
-        assert spelling in out
-    assert "`rm -r -f`" in readme
-    assert "`find -delete`" in readme
+    assert 'but the ones "What the guard cannot do" names' in readme
+    assert "these get past the hooks: force-push, delete, hard-reset." in out
     # The starter's matcher leaves Read alone, so .env is not guarded by it.
     assert "secrets     not guarded" in out
     assert code == 1

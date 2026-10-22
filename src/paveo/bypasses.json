@@ -1,0 +1,103 @@
+{
+  "version": "2026-10-23",
+  "actions": [
+    {
+      "name": "force-push",
+      "title": "force-push",
+      "spellings": [
+        ["Bash", "git push --force paveo-test-probe main"],
+        ["Bash", "git push -f paveo-test-probe main"],
+        ["Bash", "git push paveo-test-probe main --force"],
+        ["Bash", "git push paveo-test-probe +main"],
+        ["Bash", "git push -uf paveo-test-probe main"],
+        ["Bash", "git -C . push --force paveo-test-probe main"],
+        ["Bash", "git -c color.ui=never push --force paveo-test-probe main"],
+        ["Bash", "git --no-pager push --force paveo-test-probe main"],
+        ["Bash", "/usr/bin/git push --force paveo-test-probe main"],
+        ["Bash", "cd . && git push --force paveo-test-probe main"],
+        ["Bash", "sh -c 'git push --force paveo-test-probe main'"],
+        ["Bash", "git push --mirror paveo-test-probe"],
+        ["Bash", "env git push --force paveo-test-probe main"],
+        ["Bash", "GIT_TERMINAL_PROMPT=0 git push --force paveo-test-probe main"],
+        ["Bash", "eval 'git push --force paveo-test-probe main'"],
+        ["Bash", "git 'push' --force paveo-test-probe main"],
+        ["Bash", "F=--force; git push $F paveo-test-probe main"]
+      ]
+    },
+    {
+      "name": "delete",
+      "title": "recursive delete",
+      "spellings": [
+        ["Bash", "rm -rf /paveo-test-probe"],
+        ["Bash", "rm -fr /paveo-test-probe"],
+        ["Bash", "rm -r -f /paveo-test-probe"],
+        ["Bash", "rm --recursive --force /paveo-test-probe"],
+        ["Bash", "\\rm -rf /paveo-test-probe"],
+        ["Bash", "/bin/rm -rf /paveo-test-probe"],
+        ["Bash", "command rm -rf /paveo-test-probe"],
+        ["Bash", "sh -c 'rm -rf /paveo-test-probe'"],
+        ["Bash", "bash -c \"rm -rf /paveo-test-probe\""],
+        ["Bash", "find /paveo-test-probe -delete"],
+        ["Bash", "rm -Rf /paveo-test-probe"],
+        ["Bash", "rm -rf -- /paveo-test-probe"],
+        ["Bash", "rm -r /paveo-test-probe"],
+        ["Bash", "find /paveo-test-probe -exec rm -rf {} +"],
+        ["Bash", "find /paveo-test-probe -exec rm {} +"],
+        ["Bash", "python3 -c \"import shutil; shutil.rmtree('/paveo-test-probe')\""],
+        ["Bash", "echo /paveo-test-probe | xargs rm -rf"],
+        ["Bash", "R=rm; $R -rf /paveo-test-probe"],
+        ["Bash", "rm                                                                                                                        -rf /paveo-test-probe"]
+      ]
+    },
+    {
+      "name": "hard-reset",
+      "title": "hard reset",
+      "spellings": [
+        ["Bash", "git reset --hard paveo-test-probe"],
+        ["Bash", "git reset paveo-test-probe --hard"],
+        ["Bash", "git -C . reset --hard paveo-test-probe"],
+        ["Bash", "git --no-pager reset --hard paveo-test-probe"],
+        ["Bash", "cd . && git reset --hard paveo-test-probe"],
+        ["Bash", "sh -c 'git reset --hard paveo-test-probe'"],
+        ["Bash", "env git reset --hard paveo-test-probe"],
+        ["Bash", "eval 'git reset --hard paveo-test-probe'"],
+        ["Bash", "git 'reset' --hard paveo-test-probe"]
+      ]
+    },
+    {
+      "name": "clean",
+      "title": "git clean",
+      "spellings": [
+        ["Bash", "git clean -fdx -- paveo-test-probe"],
+        ["Bash", "git clean -f -d -x -- paveo-test-probe"],
+        ["Bash", "git clean --force -d -- paveo-test-probe"],
+        ["Bash", "git -C . clean -fdx -- paveo-test-probe"],
+        ["Bash", "sh -c 'git clean -fdx -- paveo-test-probe'"],
+        ["Bash", "git clean -xdf -- paveo-test-probe"],
+        ["Bash", "env git clean -fdx -- paveo-test-probe"],
+        ["Bash", "git clean -dffx -- paveo-test-probe"]
+      ]
+    },
+    {
+      "name": "secrets",
+      "title": "reading .env",
+      "spellings": [
+        ["Read", ".env"],
+        ["Bash", "cat .env"],
+        ["Bash", "cat ./.env"],
+        ["Bash", "head -n 50 .env"],
+        ["Bash", "sed -n p .env"],
+        ["Bash", "awk 1 .env"],
+        ["Bash", "base64 .env"],
+        ["Bash", "python3 -c \"print(open('.env').read())\""],
+        ["Bash", "sh -c 'cat .env'"],
+        ["Read", "./.env"],
+        ["Bash", "grep . .env"],
+        ["Bash", "tail -n +1 .env"],
+        ["Bash", "xxd .env"],
+        ["Bash", "nl .env"],
+        ["Bash", "cat \"$PWD/.env\""]
+      ]
+    }
+  ]
+}

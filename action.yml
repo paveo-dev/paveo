@@ -1,0 +1,41 @@
+# `uses: paveo-dev/paveo@v0.1.11`: run `paveo test` on this repository's Claude
+# Code hooks, and fail the job when a dangerous action gets past them (D106).
+# Inputs reach the shell only as environment variables, never inside `run:`,
+# so nothing a workflow passes in can be run as a command.
+name: Paveo guard test
+description: Fail the build when a dangerous command gets past your AI coding agent's guards.
+branding:
+  icon: shield
+  color: green
+inputs:
+  expect:
+    description: >-
+      Actions the hooks must stop in every spelling, separated by spaces:
+      force-push, delete, hard-reset, clean, secrets. Empty fails only a guard
+      that can be walked around.
+    default: ""
+  version:
+    description: The paveo release to run, as x.y.z.
+    default: "0.1.11"
+  json:
+    description: Where to write the results as JSON.
+    default: paveo-test.json
+runs:
+  using: composite
+  steps:
+    - name: Install paveo
+      shell: bash
+      env:
+        PAVEO_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        [[ "$PAVEO_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must be x.y.z" >&2; exit 2; }
+        python3 -m venv "$RUNNER_TEMP/paveo"
+        "$RUNNER_TEMP/paveo/bin/pip" install --quiet --disable-pip-version-check "paveo==$PAVEO_VERSION"
+        echo "$RUNNER_TEMP/paveo/bin" >> "$GITHUB_PATH"
+    - name: Test the guards
+      shell: bash
+      env:
+        PAVEO_EXPECT: ${{ inputs.expect }}
+        PAVEO_JSON: ${{ inputs.json }}
+      run: bash "$GITHUB_ACTION_PATH/action/test.sh"

@@ -48,3 +48,16 @@ def records_in(path: Path) -> list[dict[str, object]]:
 @pytest.fixture
 def clock() -> Callable[[], datetime]:
     return make_clock()
+
+
+_PROBE = "paveo-test-probe"
+# Spellings of `paveo test` (src/paveo/bypasses.json) that a pattern in the
+# starters cannot stop without refusing ordinary work, each with the words the
+# README's "What the guard cannot do" uses for it.
+KNOWN_GAPS = {
+    f"git 'push' --force {_PROBE} main": "a quoted verb (`git 'push'`)",
+    f"git 'reset' --hard {_PROBE}": "a quoted verb (`git 'push'`)",
+    f"F=--force; git push $F {_PROBE} main": "a command hidden in a variable",
+    f"R=rm; $R -rf /{_PROBE}": "a command hidden in a variable",
+    f"rm -r /{_PROBE}": "`rm -r` without `-f`",
+}
