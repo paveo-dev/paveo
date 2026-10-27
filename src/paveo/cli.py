@@ -591,12 +591,20 @@ def _test(arguments: argparse.Namespace) -> int:
     # Imported here: only this command starts the project's hooks, and the
     # guard, which runs on every call, should not load what does it.
     try:
-        from . import _bypasses, _guard_test  # noqa: PLC0415
+        from . import _bypasses, _codex_hooks, _guard_test  # noqa: PLC0415
     except ConfigError as e:
         sys.stderr.write(f"paveo: {e}\n")
         return 2
     project = Path.cwd()
-    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project)}
+    codex = arguments.harness == CODEX.name
+    # Codex sets no project variable (D57): a hook that reads Claude Code's is
+    # run without it, as Codex would run it, even when the shell running the
+    # test already has it, as inside a Claude Code session (/code-review).
+    env = dict(os.environ)
+    if codex:
+        env.pop("CLAUDE_PROJECT_DIR", None)
+    else:
+        env["CLAUDE_PROJECT_DIR"] = str(project)
     names = [action.name for action in _bypasses.ACTIONS]
     unknown = sorted(set(arguments.expect or []) - set(names))
     if unknown:
@@ -617,31 +625,58 @@ def _test(arguments: argparse.Namespace) -> int:
                 f"paveo test: cannot write {arguments.json} ({type(e).__name__}).\n"
             )
             return 2
+        if arguments.settings:
+            files = [Path(path) for path in arguments.settings]
+        elif codex:
+            # Codex's system layer, lowest, then the person's and the project's.
+            system = Path("/etc/codex")
+            files = [
+                system / "hooks.json",
+                system / "config.toml",
+                *_codex_hooks.files(project, _codex_home()),
+            ]
+        else:
+            files = _hook_files(CLAUDE_CODE, project)
         return _guard_test.command(
-            [Path(path) for path in arguments.settings]
-            if arguments.settings
-            else _hook_files(CLAUDE_CODE, project),
+            files,
             project=project,
             expect=arguments.expect or [],
             out=sys.stdout,
-            run=partial(_guard_test.run_handler, project=project, env=env),
-            # Where Claude Code's docs put file-based managed settings, and where
-            # macOS keeps a configuration profile's preferences.
-            managed=[
-                Path("/Library/Application Support/ClaudeCode/managed-settings.json"),
-                Path("/Library/Application Support/ClaudeCode/managed-settings.d"),
-                Path("/Library/Managed Preferences/com.anthropic.claudecode.plist"),
-                # A profile scoped to one user lands in that user's folder.
-                *_guard_test.user_profiles(
-                    Path("/Library/Managed Preferences"),
-                    "com.anthropic.claudecode.plist",
-                ),
-                Path("/etc/claude-code/managed-settings.json"),
-                Path("/etc/claude-code/managed-settings.d"),
-            ],
+            # Only Codex reads stderr; draining it for Claude Code would make
+            # a hook that leaves a child holding stderr wait out the grace.
+            run=partial(
+                _guard_test.run_handler, project=project, env=env, read_stderr=codex
+            ),
+            managed=_managed(codex=codex),
             named=bool(arguments.settings),
             record=record,
+            agent=_codex_hooks.agent(env.get("SHELL") or "/bin/sh") if codex else None,
         )
+
+
+def _managed(*, codex: bool) -> list[Path]:
+    """Where an organisation's settings may be, which can switch hooks off or
+    add their own: Claude Code's managed settings (its docs), or Codex's
+    requirements (``config/src/loader``); both read from a macOS profile too,
+    one scoped to a user landing in that user's folder."""
+    if codex:
+        profile = "com.openai.codex.plist"
+        paths = [
+            Path("/etc/codex/requirements.toml"),
+            Path("/etc/codex/managed_config.toml"),
+        ]
+    else:
+        profile = "com.anthropic.claudecode.plist"
+        paths = [
+            Path("/Library/Application Support/ClaudeCode/managed-settings.json"),
+            Path("/Library/Application Support/ClaudeCode/managed-settings.d"),
+            Path("/etc/claude-code/managed-settings.json"),
+            Path("/etc/claude-code/managed-settings.d"),
+        ]
+    from ._guard_test import user_profiles  # noqa: PLC0415 - as _test imports it
+
+    preferences = Path("/Library/Managed Preferences")
+    return [*paths, preferences / profile, *user_profiles(preferences, profile)]
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -706,7 +741,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     doctor.add_argument("--settings", action="append", help="settings file to check")
     test = commands.add_parser(
-        "test", help="run this project's Claude Code hooks against bypass spellings"
+        "test", help="run this project's agent hooks against bypass spellings"
+    )
+    test.add_argument(
+        "harness",
+        nargs="?",
+        default=CLAUDE_CODE.name,
+        choices=[CLAUDE_CODE.name, CODEX.name],
+        help="the agent whose hooks to test (default: claude-code)",
     )
     test.add_argument(
         "--expect",

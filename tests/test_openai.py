@@ -1,8 +1,9 @@
 """OpenAI: the price rows and the Chat Completions adapter (S4b, D41).
 
 The rates are pinned to the figures OpenAI's pricing page and model pages print,
-read on 2026-09-24, not derived from our own multipliers, so a wrong multiplier
-disagrees with this file instead of being copied into it.
+read on 2026-09-24 and again on 2026-10-27 (D112), not derived from our own
+multipliers, so a wrong multiplier disagrees with this file instead of being
+copied into it.
 """
 
 from __future__ import annotations

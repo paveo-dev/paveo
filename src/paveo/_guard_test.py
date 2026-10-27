@@ -1,9 +1,11 @@
 """``paveo test``: whether a project's own Claude Code hooks stop the dangerous
-actions, however they are spelled (D102).
+actions, however they are spelled (D102). Codex's hooks are tested the same
+way with Codex's rules (``_codex_hooks``, D111); this module describes Claude
+Code's, and the run both share.
 
 ::
 
-    paveo test [--expect ACTION ...] [--settings FILE ...] [--json FILE]
+    paveo test [codex] [--expect ACTION ...] [--settings FILE ...] [--json FILE]
 
 Each spelling in ``_bypasses`` is sent to every ``PreToolUse`` hook whose matcher
 reaches it, as the JSON Claude Code sends, and each answer is read the way Claude
@@ -61,7 +63,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Literal, TextIO
 
-from ._bypasses import ACTIONS, ORDINARY, VERSION, Action, Spelling
+from ._bypasses import ACTIONS, ORDINARY, VERSION, Spelling
 from ._doctor import (
     PERMISSION_MODES,
     _not_json,
@@ -133,15 +135,21 @@ class Run:
     stdout: bytes | None  # None: more than _MAX_OUTPUT
     failure: str | None = None
     timed_out: bool = False
+    # Whether it wrote anything but white space to stderr, which Codex needs
+    # before exit 2 blocks. What it wrote is never kept: it can carry a token.
+    wrote_stderr: bool = False
 
 
 @dataclass
-class _Found:
+class Found:
+    """What an agent's files say about its hooks, read before any is run."""
+
     handlers: list[Handler] = field(default_factory=list)
     unread: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     read: int = 0
-    disabled_by: str | None = None
+    # Why the agent runs none of these hooks, said as a sentence, or None.
+    disabled: str | None = None
     permission_rules: bool = False
     # Each plugin's latest enabled value, files read lowest precedence first.
     plugins: dict[str, object] = field(default_factory=dict)
@@ -178,9 +186,24 @@ Runner = Callable[[Handler, bytes], Run]
 
 
 @dataclass(frozen=True)
+class Agent:
+    """What differs between the agents ``paveo test`` reads: where their hooks
+    are, the call each sends a hook, and how each reads the answer."""
+
+    title: str
+    nothing_found: str
+    # The tools it has, of those the list's spellings use.
+    tools: frozenset[str]
+    find: Callable[[Sequence[Path], Path, bool], Found]  # files, project, named
+    call: Callable[[Spelling, Path, str], bytes]  # spelling, project, mode
+    decide: Callable[[Run, bool], tuple[Decision, str | None]]  # blocks on failure
+
+
+@dataclass(frozen=True)
 class _Probe:
     """What every call in one run is sent with."""
 
+    agent: Agent
     project: Path
     run: Runner
     tally: _Tally
@@ -200,43 +223,48 @@ def command(  # noqa: PLR0913 - each is an input the command line decides
     managed: Sequence[Path] = (),
     named: bool = False,
     record: TextIO | None = None,
+    agent: Agent | None = None,
 ) -> int:
-    """Run every spelling against the hooks in ``files``, lowest precedence
-    first, and report; see the module for what each exit means. ``managed``:
-    where managed settings may be, which are not read; one that is there makes
-    the run unsure, since it can switch every hook here off. ``record``: where
-    ``--json`` writes the same results for a machine, the list's version with them."""
-    found = _find(files, project=project, named=named)
+    """Run every spelling ``agent`` has the tools for against the hooks in
+    ``files``, lowest precedence first, and report; see the module for what
+    each exit means. ``managed``: where managed settings may be, which are not
+    read; one that is there makes the run unsure, since it can switch every
+    hook here off. ``record``: where ``--json`` writes the same results for a
+    machine, the list's version with them."""
+    agent = agent or CLAUDE_CODE
+    found = agent.find(files, project, named)
     present = [path for path in managed if _maybe_there(path)]
     for line in found.unread:
         out.write(f"paveo: {_shown(line)}. Not read.\n")
     if found.read == 0 and not found.unread:
-        out.write("paveo: no Claude Code settings file found. Looked for:\n")
+        out.write(f"paveo: {agent.nothing_found}. Looked for:\n")
         out.writelines(f"  {_shown(str(path))}\n" for path in files)
     handlers = found.handlers
-    if found.disabled_by is not None:
-        out.write(
-            f"paveo: {_shown(found.disabled_by)} sets disableAllHooks, so Claude "
-            "Code runs none of its hooks.\n"
-        )
+    if found.disabled is not None:
+        out.write(f"paveo: {_shown(found.disabled)}\n")
         handlers = []
     elif not handlers and found.read:
         out.write("paveo: no PreToolUse command hook found.\n")
     tally = _Tally()
     probe = _Probe(
-        project, run, tally, unseen=found.plugins_on, mode=found.default_mode
+        agent, project, run, tally, unseen=found.plugins_on, mode=found.default_mode
     )
-    results = {
-        action.name: [_verdict(s, handlers, probe) for s in action.spellings]
+    tested = {
+        action.name: [s for s in action.spellings if s.tool in agent.tools]
         for action in ACTIONS
+    }
+    results = {
+        name: [_verdict(s, handlers, probe) for s in spellings]
+        for name, spellings in tested.items()
     }
     ordinary_stopped = [
         _named(spelling)
         for spelling in ORDINARY
-        if _verdict(spelling, handlers, replace(probe, unseen=False))
+        if spelling.tool in agent.tools
+        and _verdict(spelling, handlers, replace(probe, unseen=False))
         in {"block", "ask"}
     ]
-    spellings = sum(len(action.spellings) for action in ACTIONS)
+    spellings = sum(len(each) for each in tested.values())
     out.write(
         f"paveo test: {len(handlers)} hook{'s' * (len(handlers) != 1)}, "
         f"{spellings} spellings of {len(ACTIONS)} dangerous actions.\n"
@@ -245,9 +273,16 @@ def command(  # noqa: PLR0913 - each is an input the command line decides
         found,
         handlers,
         tally,
+        title=agent.title,
         present=present,
         ordinary=ordinary_stopped,
     )
+    left_out = sum(len(action.spellings) for action in ACTIONS) - spellings
+    if left_out:
+        notes.append(
+            f"{left_out} spellings that use Claude Code's Read tool are left out: "
+            f"{agent.title} has no such tool, and reads files through its shell."
+        )
     if any("ask" in verdicts for verdicts in results.values()):
         notes.append(
             "an ask is counted as a stop, which holds in a session that starts "
@@ -258,8 +293,8 @@ def command(  # noqa: PLR0913 - each is an input the command line decides
     out.writelines(f"  note: {_shown(line)}\n" for line in notes)
     out.write("\n")
     outcomes = [
-        _outcome(action, results[action.name], expected=action.name in expect)
-        for action in ACTIONS
+        _outcome(name, tested[name], results[name], expected=name in expect)
+        for name in tested
     ]
     walked = [outcome.name for outcome in outcomes if _report(outcome, out)]
     unsure = bool(found.unread or ordinary_stopped or present)
@@ -295,17 +330,18 @@ def _ending(
     return 0, "nothing expected got past the hooks."
 
 
-def _notes(
-    found: _Found,
+def _notes(  # noqa: PLR0913 - each is a separate thing the run could not see
+    found: Found,
     handlers: Sequence[Handler],
     tally: _Tally,
     *,
+    title: str,
     present: Sequence[Path],
     ordinary: Sequence[str],
 ) -> list[str]:
     """Everything the run could not see or could not trust, said before the
     results it qualifies."""
-    notes = [*found.notes, *_failure_notes(handlers, tally)]
+    notes = [*found.notes, *_failure_notes(handlers, tally, title=title)]
     if found.permission_rules:
         notes.append(
             "Claude Code's own permission rules are not tested yet: a spelling "
@@ -348,18 +384,22 @@ class _Outcome:
     passing: tuple[str, ...]
 
 
-def _outcome(action: Action, verdicts: list[Decision], *, expected: bool) -> _Outcome:
+def _outcome(
+    name: str,
+    spellings: Sequence[Spelling],
+    verdicts: list[Decision],
+    *,
+    expected: bool,
+) -> _Outcome:
     return _Outcome(
-        name=action.name,
+        name=name,
         expected=expected,
         spellings=len(verdicts),
         stopped=sum(v in {"block", "ask"} for v in verdicts),
         asked=verdicts.count("ask"),
         unknown=verdicts.count("unknown"),
         passing=tuple(
-            _named(s)
-            for s, v in zip(action.spellings, verdicts, strict=True)
-            if v == "none"
+            _named(s) for s, v in zip(spellings, verdicts, strict=True) if v == "none"
         ),
     )
 
@@ -394,7 +434,7 @@ def _verdict(
     ignored outside ``claude -p``, so what an ask means beside a defer cannot
     be told, nor beside a hook that was not run (plugins' hooks, which reach
     every call for all this can tell), which might defer."""
-    payload = _call(spelling, probe.project, probe.mode)
+    payload = probe.agent.call(spelling, probe.project, probe.mode)
     tally = probe.tally
     decisions: set[Decision] = set()
     for handler in handlers:
@@ -414,9 +454,7 @@ def _verdict(
             decision: Decision = "unknown"
             failure: str | None = None
         else:
-            decision, failure = _decide(
-                answer, blocks_on_failure=handler.blocks_on_failure
-            )
+            decision, failure = probe.agent.decide(answer, handler.blocks_on_failure)
         if failure is not None:
             tally.failures.setdefault(handler.where, Counter())[failure] += 1
         decisions.add(decision)
@@ -428,7 +466,7 @@ def _verdict(
     return "unknown" if "unknown" in decisions else "none"
 
 
-def _decide(run: Run, *, blocks_on_failure: bool) -> tuple[Decision, str | None]:
+def _decide(run: Run, blocks_on_failure: bool) -> tuple[Decision, str | None]:
     """One hook's answer to one call, and why it failed if it did; the table in
     the reference's "Exit code output" section."""
     failure = run.failure
@@ -530,7 +568,9 @@ def _call(spelling: Spelling, project: Path, mode: str) -> bytes:
     ).encode()
 
 
-def _failure_notes(handlers: Sequence[Handler], tally: _Tally) -> list[str]:
+def _failure_notes(
+    handlers: Sequence[Handler], tally: _Tally, *, title: str
+) -> list[str]:
     notes = [
         f"{handler.where} is not run: {handler.untestable}"
         for handler in handlers
@@ -557,7 +597,7 @@ def _failure_notes(handlers: Sequence[Handler], tally: _Tally) -> list[str]:
             "it sets onFailure block, so each one was stopped (Claude Code "
             "v2.1.295 or later; an earlier one lets the call through)"
             if handler.blocks_on_failure
-            else "Claude Code lets a call through when its hook fails"
+            else f"{title} lets a call through when its hook fails"
         )
         skipped = (
             "; it timed out, so it was not run for the calls after that"
@@ -576,8 +616,8 @@ def _failure_notes(handlers: Sequence[Handler], tally: _Tally) -> list[str]:
 # --------------------------------------------------------------------------
 
 
-def _find(files: Sequence[Path], *, project: Path, named: bool) -> _Found:
-    found = _Found()
+def _find(files: Sequence[Path], project: Path, named: bool) -> Found:
+    found = Found()
     # A file named twice, the home folder being the project, is read once.
     for path in dict.fromkeys(Path(os.path.realpath(path)) for path in files):
         settings = _settings(path, named=named, unread=found.unread)
@@ -586,7 +626,11 @@ def _find(files: Sequence[Path], *, project: Path, named: bool) -> _Found:
         found.read += 1
         disabled = settings.get("disableAllHooks")
         if isinstance(disabled, bool):  # the last file read is the highest
-            found.disabled_by = str(path) if disabled else None
+            found.disabled = (
+                f"{path} sets disableAllHooks, so Claude Code runs none of its hooks."
+                if disabled
+                else None
+            )
         permissions = settings.get("permissions")
         if isinstance(permissions, dict) and (
             permissions.get("deny") or permissions.get("ask")
@@ -602,7 +646,7 @@ def _find(files: Sequence[Path], *, project: Path, named: bool) -> _Found:
     return found
 
 
-def _read_hooks(path: Path, hooks: object, *, project: Path, found: _Found) -> None:
+def _read_hooks(path: Path, hooks: object, *, project: Path, found: Found) -> None:
     if hooks is None:
         return
     for g, group in enumerate(hook_groups(hooks).get("PreToolUse", [])):
@@ -728,6 +772,16 @@ def _named(spelling: Spelling) -> str:
     )
 
 
+CLAUDE_CODE = Agent(
+    title="Claude Code",
+    nothing_found="no Claude Code settings file found",
+    tools=frozenset({"Bash", "Read"}),
+    find=_find,
+    call=_call,
+    decide=_decide,
+)
+
+
 # --------------------------------------------------------------------------
 # Running a hook
 # --------------------------------------------------------------------------
@@ -739,10 +793,14 @@ def run_handler(  # noqa: PLR0913 - the clock and pause are injected (Rule 14)
     *,
     project: Path,
     env: Mapping[str, str],
+    read_stderr: bool = False,
     clock: Callable[[], float] = time.monotonic,
     pause: Callable[[float], None] = time.sleep,
 ) -> Run:
     """Run one hook with ``payload`` on stdin, as Claude Code would.
+    ``read_stderr``: learn whether it wrote to stderr, which Codex needs;
+    otherwise stderr goes nowhere, as before, so a child the hook leaves
+    holding stderr open does not make every call wait out the grace.
 
     The call goes into a pipe before the hook starts and the pipe is closed, so
     a hook that never reads stdin cannot leave the write waiting: every payload
@@ -752,6 +810,7 @@ def run_handler(  # noqa: PLR0913 - the clock and pause are injected (Rule 14)
     group id can belong to someone else."""
     call_in, call_out = os.pipe()
     answer_in, answer_out = os.pipe()
+    said_in, said_out = os.pipe() if read_stderr else (-1, subprocess.DEVNULL)
     try:
         os.write(call_out, payload)
     finally:
@@ -761,21 +820,29 @@ def run_handler(  # noqa: PLR0913 - the clock and pause are injected (Rule 14)
             handler.argv,
             stdin=call_in,
             stdout=answer_out,
-            stderr=subprocess.DEVNULL,
+            stderr=said_out,
             cwd=project,
             env=dict(env),
             start_new_session=True,
         )
     except (OSError, ValueError):  # ValueError: a NUL byte in the command
         os.close(answer_in)
+        if read_stderr:
+            os.close(said_in)
         return Run(None, b"", "could not start")
     finally:
         os.close(call_in)
         os.close(answer_out)
+        if read_stderr:
+            os.close(said_out)
     try:
-        answer = _answer(process, answer_in, handler.timeout, clock=clock, pause=pause)
+        answer = _answer(
+            process, answer_in, said_in, handler.timeout, clock=clock, pause=pause
+        )
     finally:
         os.close(answer_in)
+        if read_stderr:
+            os.close(said_in)
         stopped = _stop(process)
     if not stopped:
         return Run(None, b"", _LEFT_RUNNING, timed_out=True)
@@ -804,26 +871,31 @@ def _stop(process: subprocess.Popen[bytes]) -> bool:
     return True
 
 
-def _answer(
+def _answer(  # noqa: PLR0913 - the clock and pause are injected (Rule 14)
     process: subprocess.Popen[bytes],
     answer: int,
+    said: int,  # -1: stderr is not read
     timeout: float,
     *,
     clock: Callable[[], float],
     pause: Callable[[float], None],
 ) -> Run:
-    """The hook's exit code and what it printed, read until it exits and its
-    output ends, or ``_EXIT_GRACE_S`` after it exits if something it left
-    running holds the output open. The clock is injected (Rule 14), so a test
-    can run past the deadline without waiting for it."""
+    """The hook's exit code, what it printed, and whether it wrote to stderr,
+    read until it exits and both end, or ``_EXIT_GRACE_S`` after it exits if
+    something it left running holds them open. Stderr is read only to keep
+    its pipe from filling, and dropped. The clock is injected (Rule 14), so a
+    test can run past the deadline without waiting for it."""
     deadline = clock() + timeout
     output = bytearray()
-    too_long, reading = False, True
+    too_long = wrote_stderr = False
     exited_at: float | None = None
     with selectors.DefaultSelector() as selector:
         selector.register(answer, selectors.EVENT_READ)
+        if said >= 0:
+            selector.register(said, selectors.EVENT_READ)
         while True:
             now = clock()
+            reading = bool(selector.get_map())
             if exited_at is None and process.poll() is not None:
                 exited_at = now
             if exited_at is not None and (
@@ -836,13 +908,22 @@ def _answer(
                 break
             if not reading:
                 pause(0.01)
-            elif selector.select(min(deadline - now, 0.05)):
-                chunk = os.read(answer, 1 << 16)
+                continue
+            for key, _events in selector.select(min(deadline - now, 0.05)):
+                chunk = os.read(key.fd, 1 << 16)
                 if not chunk:
-                    reading = False
-                    selector.unregister(answer)
+                    selector.unregister(key.fd)
+                elif key.fd == said:
+                    # Codex trims stderr before it reads a reason.
+                    wrote_stderr = wrote_stderr or bool(
+                        chunk.decode("utf-8", "replace").strip()
+                    )
                 elif len(output) + len(chunk) > _MAX_OUTPUT:
                     too_long = True
                 else:
                     output += chunk
-    return Run(process.returncode, None if too_long else bytes(output))
+    return Run(
+        process.returncode,
+        None if too_long else bytes(output),
+        wrote_stderr=wrote_stderr,
+    )

@@ -5,7 +5,11 @@
 set -euo pipefail
 set -f  # a * in expect stays a word, never this repository's file names
 
-args=()
+case "${PAVEO_AGENT:-claude-code}" in
+  claude-code) args=() ;;
+  codex) args=(codex) ;;
+  *) echo "agent must be claude-code or codex" >&2; exit 2 ;;
+esac
 for action in ${PAVEO_EXPECT:-}; do
   args+=(--expect "$action")
 done

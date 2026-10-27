@@ -1,8 +1,9 @@
 """Gemini: the price rows and the generate_content adapter (S4c, D42).
 
-Rates are pinned to the figures Google's pricing page prints, read 2026-09-24.
-Three Flash models change price on 2027-01-01, so the table is given a clock and
-tested on both sides of midnight rather than waiting for it (Rule 14).
+Rates are pinned to the figures Google's pricing page prints, read 2026-09-24 and
+again 2026-10-27 (D112). Two Flash models change price on 2027-01-01, so the
+table is given a clock and tested on both sides of midnight rather than waiting
+for it (Rule 14).
 """
 
 from __future__ import annotations
@@ -22,18 +23,17 @@ from paveo.prices import (
     _GEMINI_LISTINGS,
     _LISTINGS,
     _OPENAI_LISTINGS,
+    _GeminiListing,
     _PriceTable,
 )
 
 MILLION = Decimal(1_000_000)
 
-# (input, cached input or None, output), and Priority (input, output).
+# (input, cached input, output), and Priority (input, output).
 STANDARD = {
     "gemini-3.8-flash": ("0.75", "0.075", "3.75"),
-    "gemini-3.7-flash": ("0.75", "0.075", "3.75"),
     "gemini-3.6-flash": ("0.75", "0.075", "3.75"),
-    "gemini-3.5-flash": ("1.50", "0.15", "9.00"),
-    "gemini-3.5-flash-lite": ("0.30", None, "2.50"),
+    "gemini-3.5-flash-lite": ("0.30", "0.03", "2.50"),
     "gemini-3.1-flash-lite": ("0.25", "0.025", "1.50"),
     "gemini-3.1-pro-preview": ("2.00", "0.20", "12.00"),
     "gemini-3-flash-preview": ("0.50", "0.05", "3.00"),
@@ -43,7 +43,8 @@ STANDARD = {
 }
 PRIORITY = {
     "gemini-3.8-flash": ("1.35", "6.75"),
-    "gemini-3.5-flash": ("2.70", "16.20"),
+    "gemini-3.6-flash": ("1.35", "6.75"),
+    "gemini-3.5-flash-lite": ("0.54", "4.50"),
     "gemini-3.1-pro-preview": ("3.60", "21.60"),
     "gemini-2.5-pro": ("2.25", "18.00"),
     "gemini-2.5-flash-lite": ("0.18", "0.72"),
@@ -76,11 +77,20 @@ def test_every_standard_rate_is_the_one_the_page_prints(model: str) -> None:
 
     assert per_million(rates.per_token["input"]) == Decimal(base)
     assert per_million(rates.per_token["output"]) == Decimal(output)
-    if cached is None:
-        # "Context caching: Not available": a cached count would stop the table.
+    assert per_million(rates.per_token["cache_read"]) == Decimal(cached)
+
+
+def test_a_model_whose_page_says_no_caching_carries_no_cached_rate() -> None:
+    """No listed model says "Not available" since 27 Oct (gemini-3.5-flash-lite
+    gained a cached price), so the rule is pinned on a listing of its own: a
+    cached count on such a model must stop the table, not be charged as input."""
+    listing = _GeminiListing(("1.00", None, "2.00"), ("1.80", "3.60"))
+    for tier in ({}, {"service_tier": "priority"}):
+        t = _PriceTable({"no-cache": listing}, now=lambda: BEFORE_2027)
+        rates = t.resolve("no-cache", tier)
         assert "cache_read" not in rates.per_token
-    else:
-        assert per_million(rates.per_token["cache_read"]) == Decimal(cached)
+        usage = {"input": 10, "cache_read": 5, "output": 1}
+        assert t.actual(rates, usage).price_table_stale
 
 
 @pytest.mark.parametrize("model", sorted(PRIORITY))
@@ -110,19 +120,18 @@ def test_a_tier_the_table_does_not_price_is_refused() -> None:
         table().resolve("gemini-2.5-flash", {"service_tier": "provisioned"})
 
 
-def test_three_flash_models_double_at_midnight_on_new_year_2027() -> None:
+@pytest.mark.parametrize("model", ["gemini-3.8-flash", "gemini-3.6-flash"])
+def test_two_flash_models_double_at_midnight_on_new_year_2027(model: str) -> None:
     """The page: "$0.75 through December 31, 2026. $1.50 starting January 1,
     2027". Priced by the day the call is admitted, from an injected clock."""
-    before = table(BEFORE_2027).resolve("gemini-3.8-flash", {})
-    after = table(FROM_2027).resolve("gemini-3.8-flash", {})
+    before = table(BEFORE_2027).resolve(model, {})
+    after = table(FROM_2027).resolve(model, {})
 
     assert per_million(before.per_token["input"]) == Decimal("0.75")
     assert per_million(after.per_token["input"]) == Decimal("1.50")
     assert per_million(after.per_token["output"]) == Decimal("7.50")
-    assert after.rate_key == "gemini-3.8-flash|service_tier=unset|from=2027-01-01"
-    priority = table(FROM_2027).resolve(
-        "gemini-3.8-flash", {"service_tier": "priority"}
-    )
+    assert after.rate_key == f"{model}|service_tier=unset|from=2027-01-01"
+    priority = table(FROM_2027).resolve(model, {"service_tier": "priority"})
     assert per_million(priority.per_token["output"]) == Decimal("13.50")
 
 

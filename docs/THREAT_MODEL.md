@@ -316,6 +316,14 @@ wrong type) each make the run say it could not tell, never pass. A settings file
 past the parser's limit or a NUL byte in a command is reported, not a crash. Its output is read to 1 MiB and never printed, nor is its command
 (either can hold a token); only file paths are, with control characters escaped.
 `http` hooks are never run, so the command still opens no socket of its own.
+→ **Codex (D111).** `paveo test codex` runs the hooks in every Codex hook file it
+reads, `/etc/codex/config.toml` and `$CODEX_HOME` included, in `$SHELL -lc` as
+Codex does, so a login shell's start-up files run too, as they would under Codex.
+A hook's stderr is now read, through a pipe, only to learn whether it wrote
+anything (Codex needs a reason before exit 2 blocks); it is never kept or printed.
+A Codex file that fails Codex's schema, an `mcp_tool` hook (never run, so no
+socket) and a matcher Rust's regex engine would refuse each make the run say it
+could not tell.
 → **The spellings are a data file anyone can propose changes to** (`bypasses.json`,
 D106, D107), so a hostile pull request is in scope. Each spelling is split as
 a shell splits it, and every command on the line must aim at the probe, use

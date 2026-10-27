@@ -1140,7 +1140,7 @@ def test_a_capped_hook_left_running_is_said_beside_its_cut_short_line() -> None:
     tally.timed_out.add(handler.where)
     tally.cut_short.add(handler.where)
     tally.left_running.add(handler.where)
-    (note,) = _failure_notes([handler], tally)
+    (note,) = _failure_notes([handler], tally, title="Claude Code")
     assert "cannot be told" in note
     assert "could not be stopped" in note
     assert "lets a call through" not in note

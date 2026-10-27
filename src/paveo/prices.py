@@ -55,9 +55,9 @@ from .policy import DeclaredPrice
 # `make release-check` refuses to ship one over 30 days old. docs/PRICES.md is
 # the procedure.
 VERIFIED: Mapping[str, str] = {
-    "anthropic": "2026-09-23",
-    "openai": "2026-09-24",
-    "gemini": "2026-09-24",
+    "anthropic": "2026-10-27",
+    "openai": "2026-10-27",
+    "gemini": "2026-10-27",
 }
 # The version names the table as a whole: the latest date any part was read.
 PRICES_VERSION = max(VERIFIED.values())
@@ -176,9 +176,10 @@ class _Listing:
     us_inference: bool = True
 
 
-# Read from _SOURCE on 2026-09-23. Deliberately absent: the Mythos models
-# (limited availability), Opus 4.5 and Sonnet 4.5, and everything retired. A model
-# not listed is refused with PricingUnknown rather than guessed at.
+# Read from _SOURCE on 2026-09-23, re-read 2026-10-27 (D112). Deliberately
+# absent: the Mythos models (limited availability), Opus 4.5 and Sonnet 4.5, and
+# everything retired. A model not listed is refused with PricingUnknown rather
+# than guessed at.
 _LISTINGS: Mapping[str, _Listing] = {
     # Cache reads at 0.025x on Fable 5.1, footnote 1 on the page.
     "claude-fable-5-1": _Listing(standard=("10", "50"), cache_read="0.025"),
@@ -209,14 +210,15 @@ class _OpenAIListing:
     """One OpenAI model's rows, USD per million tokens: (input, cached input, output).
 
     Read from ``developers.openai.com/api/docs/pricing`` and the model pages on
-    2026-09-24 (D41). ``fast`` is the Fast (formerly priority) tier, ``None``
-    where the page lists none. ``cache_write`` is GPT-5.6 and later, where a
-    cache write costs 1.25x uncached input and each token is billed at exactly one
-    rate; on earlier models a write costs plain input. ``long_context``: a prompt
-    over 272K input tokens bills the **whole request** at 2x input and 1.5x
-    output. ``regional``: released on or after 2026-03-05 and on the data
-    residency list, so a regional endpoint or a project's region adds 10%, which
-    no request can show us, so it is always charged.
+    2026-09-24 (D41), re-read 2026-10-27 (D112). ``fast`` is the Fast (formerly
+    priority) tier, ``None`` where the page lists none. ``cache_write`` is GPT-5.6
+    and later, where a cache write costs 1.25x uncached input and each token is
+    billed at exactly one rate; on earlier models a write costs plain input. The
+    12-hour write (2.5x, read 2026-10-27) is not priced yet: D112, README.
+    ``long_context``: a prompt over 272K input tokens bills the **whole request**
+    at 2x input and 1.5x output. ``regional``: released on or after 2026-03-05
+    and on the data residency list, so a regional endpoint or a project's region
+    adds 10%, which no request can show us, so it is always charged.
     """
 
     standard: tuple[str, str, str]
@@ -299,14 +301,15 @@ _OPENAI_LISTINGS: Mapping[str, _OpenAIListing] = {
 class _GeminiListing:
     """One Gemini model's paid-tier rows, USD per million tokens.
 
-    Read from ``ai.google.dev/gemini-api/docs/pricing`` on 2026-09-24 (D42).
+    Read from ``ai.google.dev/gemini-api/docs/pricing`` on 2026-09-24 (D42),
+    re-read 2026-10-27 (D112).
     ``standard`` is (input, cached input, output); cached is ``None`` where the
     page says caching is not available. ``priority`` is (input, output); its
     cached rate is not published, so a cached token on Priority is charged at
     Priority input, the dearer of the two. ``long_context``: a prompt over 200K
     tokens bills the whole request at 2x input and 1.5x output (every "> 200k"
     row on the page fits). ``changes``: the date a new price takes effect, and the
-    listing from then, since three Flash models double on 2027-01-01.
+    listing from then, since two Flash models double on 2027-01-01.
     """
 
     standard: tuple[str, str | None, str]
@@ -323,10 +326,8 @@ _FLASH_2026 = _GeminiListing(
 
 _GEMINI_LISTINGS: Mapping[str, _GeminiListing] = {
     "gemini-3.8-flash": _FLASH_2026,
-    "gemini-3.7-flash": _FLASH_2026,
     "gemini-3.6-flash": _FLASH_2026,
-    "gemini-3.5-flash": _GeminiListing(("1.50", "0.15", "9.00"), ("2.70", "16.20")),
-    "gemini-3.5-flash-lite": _GeminiListing(("0.30", None, "2.50"), ("0.54", "4.50")),
+    "gemini-3.5-flash-lite": _GeminiListing(("0.30", "0.03", "2.50"), ("0.54", "4.50")),
     # Text, image and video input; audio is dearer and is refused by the adapter.
     "gemini-3.1-flash-lite": _GeminiListing(
         ("0.25", "0.025", "1.50"), ("0.45", "2.70")
@@ -520,8 +521,9 @@ class _PriceTable:
                 model=model,
                 detail=f"it is not in price table version {self.version}",
                 remedy=(
-                    f"use a model the table prices ({priced}), or upgrade paveo if "
-                    f"the model is newer than the table."
+                    f"use a model the table prices ({priced}), upgrade paveo if the "
+                    f"model is newer than the table, or declare its price in the "
+                    f"policy (D39) if the table no longer carries it."
                 ),
             )
 

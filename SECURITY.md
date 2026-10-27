@@ -57,8 +57,9 @@ Overclaiming is itself a security problem, so:
   judged; a hard link is judged by its own name, and a link swapped in after
   that, before the agent opens the file, is followed. See THREAT_MODEL T10.
 - **`paveo test` runs your project's hooks; nothing else in Paveo does.** It
-  starts each PreToolUse command hook in your Claude Code settings, with your
-  environment and the project as its folder, to see whether it stops bypass
+  starts each PreToolUse command hook in your Claude Code settings (or, with
+  `paveo test codex`, your Codex hook files, each in your login shell as Codex
+  runs it), with your environment and the project as its folder, to see whether it stops bypass
   spellings of dangerous commands: run it where you would run the project's own
   tests. The commands it hands a hook are harmless if the hook ran them. A hook
   still running after 10 seconds is killed with every process it started. It

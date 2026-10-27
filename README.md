@@ -22,7 +22,8 @@ as guards that can never block. (`uvx` comes with
 `uvx paveo test` sends those hooks 68 spellings of five dangerous actions, the
 way Claude Code sends a call, and names each spelling that gets past them; in CI,
 `--expect` makes the build fail the day a guard stops stopping one
-([details](#test-the-hooks-you-already-have)).
+([details](#test-the-hooks-you-already-have)). `uvx paveo test codex` does the
+same for a project's Codex hooks, by Codex's rules ([details](#codex-hooks)).
 
 ```
 pip install paveo            # Python 3.11+ (python3 --version), macOS or Linux
@@ -407,7 +408,7 @@ for a machine; the Action puts the report in the job summary):
 
 ```yaml
 - uses: actions/checkout@v7
-- uses: paveo-dev/paveo@v0.1.11
+- uses: paveo-dev/paveo@v0.1.12
   with:
     expect: force-push delete hard-reset clean
 ```
@@ -443,6 +444,40 @@ output, only where the hook is. Run against Paveo's own starter it stops every s
 starter refuses but the ones "What the guard cannot do" names (a quoted
 verb, a flag or `rm` in a variable, `rm -r` without `-f`), and reports `.env` not
 guarded, since `init`'s hook does not watch Read.
+
+#### Codex hooks
+
+`paveo test codex` runs the same test on a project's Codex hooks, read as Codex
+reads them (its hooks page and its source, `codex-rs/hooks`, read 25 Oct 2026).
+It reads every place Codex loads hooks from, and all of them count, since in
+Codex a higher layer adds hooks rather than replacing them: `hooks.json` and the
+`[hooks]` table of `config.toml` in `/etc/codex`, then in `$CODEX_HOME`
+(`~/.codex`), then in the `.codex` folder of each folder from the repository's
+root down to where you run it. Each hook runs as Codex runs it, in your own
+login shell (`$SHELL -lc`), without Claude Code's `CLAUDE_PROJECT_DIR`, even when
+the shell you run it from has one. The
+answers differ from Claude Code's, and the test follows Codex: **exit 2 stops a
+call only when the hook also writes a reason to stderr**; on exit 0, a
+`permissionDecision` of `deny` or the older `decision: block` stops it only with
+a non-empty reason; **`ask` is not a stop**, since Codex reads it but does not
+support it yet and lets the call on; and every other answer, an unknown field in
+the JSON among them, is the hook failing, which lets the call through, since
+Codex has no way for a hook to fail closed. A matcher of only letters, digits,
+`_` and `|` names tools exactly; any other is a regex that may match anywhere in
+the name, and one written in syntax Codex's regex engine refuses is not run.
+Codex sends every shell command as `Bash`, and has no Read tool, so the 2
+spellings that read `.env` with Claude Code's Read tool are left out (66 in
+all); its shell spellings of reading `.env` stay in. Not run, and said: `mcp_tool`
+hooks, hooks switched off in `/hooks`, and `prompt` and `agent` hooks, which Codex
+skips too. A file Codex would skip whole (a `hooks.json` with an unknown
+top-level key, a hook of a type Codex does not know, a timeout that is not a
+whole number) is reported as unread, and the run cannot tell; so can
+`/etc/codex/requirements.toml`, `/etc/codex/managed_config.toml` or a macOS
+profile for `com.openai.codex`, which can add hooks of their own and are not
+read. **Codex runs a hook only once someone has trusted it in `/hooks`, and a
+project's only in a trusted project**; this tests what each hook does once
+trusted, and says so. `paveo guard codex --selftest` checks the trust records on
+your own machine. In the GitHub Action, add `agent: codex` under `with:`.
 
 **Codex.** Built against Codex's documented hook contract and its source, and
 **it has refused `rm -rf` in a real session** (macOS, 26 Sep 2026). It checks
@@ -671,6 +706,14 @@ And for budgets:
   10% regional-processing uplift on the ten models eligible for it (it depends
   on your endpoint or project region), and 1,000 tokens whenever you pass tools,
   for the formatting OpenAI adds and does not publish.
+- **OpenAI's 12-hour cache writes are not priced yet.** On GPT-5.6 and later
+  OpenAI bills a 12-hour cache write at 2.5× input, beside the 30-minute write at
+  1.25×. Paveo charges every OpenAI cache write at 1.25×, so a 12-hour write
+  would be under-charged. OpenAI documents the 12-hour lifetime for its
+  Responses API, and Paveo's OpenAI adapter measures Chat Completions, but it
+  does not stop a request from asking for a longer `prompt_cache_retention`.
+  Until this is priced, don't count on Paveo's ceiling for long-lived OpenAI
+  caching.
 - **Prices are the Claude API's own.** On Amazon Bedrock and Google Cloud the
   cloud provider sets the price, and a Google Cloud model id would be priced at
   Claude API rates, which can be lower than what you pay there.
