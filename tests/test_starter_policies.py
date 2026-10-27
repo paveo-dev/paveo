@@ -11,6 +11,7 @@ import itertools
 import json
 import re
 import string
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ import pytest
 from conftest import KNOWN_GAPS
 from paveo._bypasses import ACTIONS
 from paveo._policy_document import load_file
+from paveo._setup import GUARD_DEADLINE_S
 from paveo.policy import Footprint, Policy, Recall
 
 POLICIES = Path(__file__).parent.parent / "src" / "paveo" / "starters"
@@ -423,12 +425,29 @@ def test_a_long_flag_cluster_is_not_slow(before: str) -> None:
         assert time.perf_counter() - started < 1.0, letters[:1]
 
 
+def _in_time(judge: Callable[[str], object], crafted: str, what: object) -> None:
+    """A crafted megabyte is answered inside the guard's own deadline, past which
+    it refuses, and in time that grows with its length rather than faster: a
+    quarter of it takes about a quarter as long, where a quadratic pattern takes
+    a sixteenth. A fixed one second failed on CI's slower machines for linear
+    patterns (D113): the absolute time is the machine's, the growth the pattern's.
+    """
+    import time  # noqa: PLC0415
+
+    started = time.perf_counter()
+    judge(crafted[: len(crafted) // 4])
+    quarter = time.perf_counter() - started
+    started = time.perf_counter()
+    judge(crafted)
+    whole = time.perf_counter() - started
+    assert whole < GUARD_DEADLINE_S, what
+    assert whole < 8 * quarter + 0.05, what
+
+
 def test_no_starter_pattern_is_slow_on_a_crafted_megabyte() -> None:
     """Claude Code lets a call through when the hook times out, so a pattern made
     slow is a pattern switched off. The first version's `.*` took over a minute
     here (/code-review, D49); the guard also refuses at its own deadline."""
-    import time  # noqa: PLC0415
-
     policy = starter("claude-code")
     for filler in (
         "rm ",
@@ -451,17 +470,21 @@ def test_no_starter_pattern_is_slow_on_a_crafted_megabyte() -> None:
         "/.",
         ".claude/plans/",
     ):
-        crafted = "ls; " + filler * ((1 << 20) // len(filler) - 2)
-        started = time.perf_counter()
-        policy.evaluate_tool("claude-code", "Bash", bash(crafted[: 1 << 20]))
-        assert time.perf_counter() - started < 1.0, filler
+        crafted = ("ls; " + filler * ((1 << 20) // len(filler) - 2))[: 1 << 20]
+        _in_time(
+            lambda text: policy.evaluate_tool("claude-code", "Bash", bash(text)),
+            crafted,
+            filler,
+        )
         # The same megabyte as a path, through each tool whose path is checked.
         for tool in PATH_TOOLS:
-            started = time.perf_counter()
-            policy.evaluate_tool(
-                "claude-code", tool, path_call(tool, crafted[: 1 << 20])
+            _in_time(
+                lambda text, tool=tool: policy.evaluate_tool(
+                    "claude-code", tool, path_call(tool, text)
+                ),
+                crafted,
+                (tool, filler),
             )
-            assert time.perf_counter() - started < 1.0, (tool, filler)
 
 
 def test_claude_code_permits_writing_the_project() -> None:
@@ -705,23 +728,25 @@ def test_codex_and_cursor_permit_ordinary_commands(
 def test_no_codex_or_cursor_pattern_is_slow_on_a_crafted_megabyte(
     name: str, tool: str
 ) -> None:
-    import time  # noqa: PLC0415
-
     policy = starter(name)
     for filler in ("rm ", "git " + "push ", ".codex", ".cursor", "/", "..", "a"):
         crafted = ("ls; " + filler * ((1 << 20) // len(filler)))[: 1 << 20]
-        started = time.perf_counter()
-        policy.evaluate_tool(name, tool, {"command": crafted})
-        assert time.perf_counter() - started < 1.0, filler
+        _in_time(
+            lambda text: policy.evaluate_tool(name, tool, {"command": text}),
+            crafted,
+            filler,
+        )
     other, field, extra = {
         "codex": ("apply_patch", "paths", {"command": ""}),
         "cursor": ("Write", "file_path", {"content": ""}),
     }[name]
     for filler in ("/", "..", "../", "\n", ".paveo"):
         crafted = (filler * ((1 << 20) // len(filler)))[: 1 << 20]
-        started = time.perf_counter()
-        policy.evaluate_tool(name, other, {field: crafted, **extra})
-        assert time.perf_counter() - started < 1.0, filler
+        _in_time(
+            lambda text: policy.evaluate_tool(name, other, {field: text, **extra}),
+            crafted,
+            filler,
+        )
 
 
 @pytest.mark.parametrize("tool", PATH_TOOLS)
