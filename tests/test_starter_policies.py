@@ -431,17 +431,23 @@ def _in_time(judge: Callable[[str], object], crafted: str, what: object) -> None
     quarter of it takes about a quarter as long, where a quadratic pattern takes
     a sixteenth. A fixed one second failed on CI's slower machines for linear
     patterns (D113): the absolute time is the machine's, the growth the pattern's.
+    Each size is timed three times and the fastest kept, so a pause on a shared
+    CI machine is not read as growth (a 0.2 s one was, on 27 Oct).
     """
     import time  # noqa: PLC0415
 
-    started = time.perf_counter()
-    judge(crafted[: len(crafted) // 4])
-    quarter = time.perf_counter() - started
-    started = time.perf_counter()
-    judge(crafted)
-    whole = time.perf_counter() - started
+    def fastest(text: str) -> float:
+        runs = []
+        for _ in range(3):
+            started = time.perf_counter()
+            judge(text)
+            runs.append(time.perf_counter() - started)
+        return min(runs)
+
+    quarter = fastest(crafted[: len(crafted) // 4])
+    whole = fastest(crafted)
     assert whole < GUARD_DEADLINE_S, what
-    assert whole < 8 * quarter + 0.05, what
+    assert whole < 8 * quarter + 0.1, what
 
 
 def test_no_starter_pattern_is_slow_on_a_crafted_megabyte() -> None:
