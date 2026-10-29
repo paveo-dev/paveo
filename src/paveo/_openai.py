@@ -30,11 +30,13 @@ Like the other readers, nothing here is stored, logged or echoed.
 
 from __future__ import annotations
 
+import hashlib
+import re
 from collections.abc import Mapping, Sequence
 
 from ._anthropic import RequestBound, _byte_length, _Refusal, model_of
 from .errors import ConfigError
-from .prices import _printable
+from .prices import _PRINTABLE_CLASS, _printable
 
 _PARAMETERS = frozenset(
     {
@@ -105,6 +107,9 @@ _TOOLS_ALLOWANCE = 1_000
 _INFORMATIONAL = frozenset(
     {"total_tokens", "reasoning_tokens", "text_tokens", "accepted_prediction_tokens"}
 )
+# Fields of `prompt_tokens_details` that `usage_classes` reads itself.
+_READ_DETAILS = frozenset({"cached_tokens", "cache_write_tokens"})
+_BREAKPOINT = ".prompt_cache_breakpoint"
 
 
 def bound(
@@ -134,8 +139,19 @@ def bound(
     messages = request.get("messages")
     if not isinstance(messages, Sequence) or isinstance(messages, str | bytes):
         refuse("messages is not a list", "pass messages as a list of turns.")
+    if request.get("prompt_cache_retention", "24h") not in {"in_memory", "24h"}:
+        refuse(
+            "prompt_cache_retention is not one of the values OpenAI lists",
+            "use in_memory or 24h, the values in OpenAI's SDK (D115).",
+        )
     for index, message in enumerate(messages):
         where = _not_text_message(message)
+        if where is not None and where.endswith(_BREAKPOINT):
+            refuse(
+                f"messages[{index}]{where} asks for a cache lifetime other than 30m, "
+                f"which paveo does not price",
+                "leave the lifetime unset, or set it to 30m (D115).",
+            )
         if where is not None:
             refuse(
                 f"messages[{index}]{where} is not text: images, audio and files "
@@ -193,9 +209,18 @@ def usage_classes(usage: Mapping[str, object]) -> dict[str, object]:
     ``completion_tokens`` already includes reasoning and rejected prediction
     tokens, which are billed as output.
 
-    Image or audio tokens in a response were refused at reserve time, so a
-    non-zero count passes through under its own name: the table sees a class it
-    does not know, charges it at its highest rate and stops (§4.8.3).
+    **A missing write count is not a zero** (D115). ``cache_write_tokens`` is
+    optional in OpenAI's own types, and a bridge that rebuilds the details can
+    drop it, so absent or ``None`` (or no prompt details at all) sends the
+    uncached prompt to ``input_unsplit``: an OpenAI row charges it at its
+    cache-write rate, every other row as input. A present 0 is a real zero.
+
+    **Nothing this adapter does not read is dropped** (D115). Each such field
+    reaches the table as ``unpriced_<name>`` with the tokens it holds: a count
+    as it is, a breakdown by its counts one level down, and anything else at
+    the most it could describe. The table charges it at the row's highest rate
+    and stops (§4.8.3). So the day OpenAI reports cache writes some new way,
+    Paveo stops rather than under-charge.
     """
     if isinstance(usage, Mapping) and isinstance(usage.get("usage"), Mapping):
         usage = usage["usage"]  # type: ignore[assignment]  # checked on the line above
@@ -219,34 +244,86 @@ def usage_classes(usage: Mapping[str, object]) -> dict[str, object]:
             remedy="pass response.usage.model_dump() from a Chat Completions response.",
         )
     assert isinstance(prompt, int)  # noqa: S101 - _count checked it
+    assert isinstance(completion, int)  # noqa: S101 - _count checked it
     cached = prompt_details.get("cached_tokens") or 0
-    written = prompt_details.get("cache_write_tokens") or 0
-    if not (_count(cached) and _count(written)) or cached + written > prompt:
+    written = prompt_details.get("cache_write_tokens")
+    if not (_count(cached) and (written is None or _count(written))) or (
+        cached + (written or 0) > prompt
+    ):
         raise ConfigError(
             "usage reports more cached and cache-written tokens than prompt tokens.",
             remedy="pass the usage object exactly as the response returned it.",
         )
-    classes: dict[str, object] = {
-        "input": prompt - cached - written,
-        "cache_read": cached,
-        "cache_write": written,
-        "output": completion,
-    }
+    classes: dict[str, int] = (
+        {"input": 0, "input_unsplit": prompt - cached}
+        if written is None
+        else {"input": prompt - cached - written, "cache_write": written}
+    )
+    classes.update({"cache_read": cached, "output": completion})
     for key, value in usage.items():
-        if key not in _USAGE_FIELDS:
-            classes[_printable(key)] = value if _count(value) else 0
-    for details, side in (
-        (prompt_details, "prompt"),
-        (completion_details, "completion"),
+        if key in _USAGE_FIELDS or value is None:
+            continue
+        # A top-level field passes at any count, 0 included: a name the table
+        # does not know is news at any count (§4.8.3, D38).
+        tokens = _tokens_in(value)
+        most = prompt - cached + completion
+        _add(classes, _unpriced(key), most if tokens is None else tokens)
+    for details, side, read, most in (
+        (prompt_details, "prompt", _READ_DETAILS, prompt - cached),
+        (completion_details, "completion", frozenset(), completion),
     ):
         for key, value in details.items():
-            if key in {"cached_tokens", "cache_write_tokens"} or key in _INFORMATIONAL:
+            if key in read or key in _INFORMATIONAL:
                 continue
             if key == "rejected_prediction_tokens":
                 continue  # inside completion_tokens, billed as output
-            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-                classes[f"{side}_{key}"] = value
-    return classes
+            tokens = _tokens_in(value)
+            if tokens != 0:
+                _add(
+                    classes,
+                    _unpriced(f"{side}_{key}"),
+                    most if tokens is None else tokens,
+                )
+    return dict(classes)
+
+
+def _tokens_in(value: object) -> int | None:
+    """The tokens a field reports: a count, or the counts of a breakdown one level
+    down; 0 for nothing (``None``, 0, an empty or all-zero breakdown); ``None``
+    for anything else, which is never taken for nothing. One definition of
+    "nothing", for every field (D115)."""
+    if value is None or (isinstance(value, Mapping | list) and not value):
+        return 0
+    if _count(value):
+        assert isinstance(value, int)  # noqa: S101 - _count checked it
+        return value
+    if isinstance(value, Mapping):
+        counts = [
+            None if isinstance(v, Mapping) else _tokens_in(v) for v in value.values()
+        ]
+        whole = [c for c in counts if c is not None]
+        if len(whole) == len(counts):
+            return sum(whole)
+    return None
+
+
+def _unpriced(key: object) -> str:
+    """The class a field this adapter does not read reaches the table under: a
+    name no priced class has, printable, and at most 64 characters, so the
+    stale error and the audit record can name it. A name that does not fit is
+    cut, with a hash of the whole so two keys never share it (D115)."""
+    name = f"unpriced_{key}"
+    if isinstance(key, str) and _PRINTABLE_CLASS.fullmatch(name):
+        return name
+    digest = hashlib.sha256(repr(key).encode()).hexdigest()[:8]
+    kept = re.sub(r"[^a-z0-9_]", "_", str(key).lower())[:44]
+    return f"unpriced_{kept}_{digest}"
+
+
+def _add(classes: dict[str, int], name: str, tokens: int) -> None:
+    """Add to a class, never overwrite: two fields reaching the same name both
+    count (D115)."""
+    classes[name] = classes.get(name, 0) + tokens
 
 
 def _count(value: object) -> bool:
@@ -281,11 +358,30 @@ def _not_text_message(message: object) -> str | None:
         return None
     if not isinstance(content, Sequence) or isinstance(content, bytes):
         return ".content"
+    return _not_text_part(content)
+
+
+def _not_text_part(content: Sequence[object]) -> str | None:
+    """Where in a message's content there is a part that is not plain text, or
+    one asking for a cache lifetime Paveo does not price, or ``None``."""
     for index, part in enumerate(content):
         kind = part.get("type") if isinstance(part, Mapping) else None
         if not isinstance(kind, str) or kind not in _TEXT_PARTS:
             return f".content[{index}]"
+        assert isinstance(part, Mapping)  # noqa: S101 - kind was read from it
+        if not _thirty_minute_breakpoint(part):
+            return f".content[{index}]{_BREAKPOINT}"
     return None
+
+
+def _thirty_minute_breakpoint(part: Mapping[str, object]) -> bool:
+    """A cache breakpoint on a part may ask only for the 30-minute lifetime,
+    the one OpenAI's API supports today and the one Paveo prices (its SDK,
+    28 Oct 2026, D115). A dearer lifetime is refused, not guessed at."""
+    if "prompt_cache_breakpoint" not in part:
+        return True
+    breakpoint_ = part["prompt_cache_breakpoint"]
+    return isinstance(breakpoint_, Mapping) and breakpoint_.get("ttl", "30m") == "30m"
 
 
 def _function_calls(calls: object) -> bool:

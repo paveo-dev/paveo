@@ -296,8 +296,8 @@ def test_image_or_audio_tokens_in_a_response_reach_the_table_as_unknown() -> Non
     }
 
     classes = usage_classes(usage)
-    assert classes["prompt_image_tokens"] == 50
-    assert classes["completion_audio_tokens"] == 5
+    assert classes["unpriced_prompt_image_tokens"] == 50
+    assert classes["unpriced_completion_audio_tokens"] == 5
 
 
 @pytest.mark.parametrize(
@@ -392,7 +392,7 @@ def test_a_top_level_usage_field_nobody_reads_reaches_the_table() -> None:
         "cache_creation_input_tokens": 90,
     }
 
-    assert usage_classes(usage)["cache_creation_input_tokens"] == 90
+    assert usage_classes(usage)["unpriced_cache_creation_input_tokens"] == 90
 
 
 def test_the_whole_response_can_be_passed_and_its_tier_settles_the_charge() -> None:
@@ -402,7 +402,12 @@ def test_the_whole_response_can_be_passed_and_its_tier_settles_the_charge() -> N
     reserved = t.resolve("gpt-5.6-sol", {})
     response = {
         "service_tier": "default",
-        "usage": {"prompt_tokens": 1_000, "completion_tokens": 1_000},
+        "usage": {
+            "prompt_tokens": 1_000,
+            "completion_tokens": 1_000,
+            # As OpenAI's SDK types define it: the write count is reported.
+            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+        },
     }
     from paveo._openai import served  # noqa: PLC0415 - the reader under test
 

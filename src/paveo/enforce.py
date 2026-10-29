@@ -576,12 +576,15 @@ def _readers(model: str, policy: Policy, shape: str) -> _Readers:
 
 
 def _counts(classes: Mapping[str, object]) -> dict[str, int]:
-    """Usage for the audit record: printable class names and whole counts only."""
-    return {
-        _printable(name): count
-        for name, count in classes.items()
-        if isinstance(count, int) and not isinstance(count, bool)
-    }
+    """Usage for the audit record: printable class names and whole counts only.
+    Names that print alike add their counts, so the record never loses one to
+    another (D115)."""
+    counts: dict[str, int] = {}
+    for name, count in classes.items():
+        if isinstance(count, int) and not isinstance(count, bool):
+            shown = _printable(name)
+            counts[shown] = counts.get(shown, 0) + count
+    return counts
 
 
 def _append(audit: AuditLog, policy: Policy, record: Mapping[str, object]) -> None:

@@ -412,7 +412,7 @@ for a machine; the Action puts the report in the job summary):
 
 ```yaml
 - uses: actions/checkout@v7
-- uses: paveo-dev/paveo@v0.1.12
+- uses: paveo-dev/paveo@v0.1.13
   with:
     expect: force-push delete hard-reset clean
 ```
@@ -710,14 +710,17 @@ And for budgets:
   10% regional-processing uplift on the ten models eligible for it (it depends
   on your endpoint or project region), and 1,000 tokens whenever you pass tools,
   for the formatting OpenAI adds and does not publish.
-- **OpenAI's 12-hour cache writes are not priced yet.** On GPT-5.6 and later
-  OpenAI bills a 12-hour cache write at 2.5× input, beside the 30-minute write at
-  1.25×. Paveo charges every OpenAI cache write at 1.25×, so a 12-hour write
-  would be under-charged. OpenAI documents the 12-hour lifetime for its
-  Responses API, and Paveo's OpenAI adapter measures Chat Completions, but it
-  does not stop a request from asking for a longer `prompt_cache_retention`.
-  Until this is priced, don't count on Paveo's ceiling for long-lived OpenAI
-  caching.
+- **OpenAI cache writes are charged at the 30-minute rate** (1.25× input on
+  GPT-5.6 and later), the only cache lifetime OpenAI's SDK lists as supported
+  (its generated types as updated on 28 Oct 2026); a request asking for another
+  lifetime, or a `prompt_cache_retention` OpenAI does not list, is refused. If a response reports cache writes some way Paveo does
+  not read, Paveo charges them at the highest rate and stops allowing calls until
+  it is upgraded, rather than under-charge. On an OpenAI model, a response with no
+  write count at all (a proxy can drop it) is charged as if every uncached token
+  were a write; on a model whose price your policy declares, as plain input, the
+  price you declared. The
+  one case no reader can tell apart: a proxy that writes a false `0` there makes
+  writes look like plain input, 0.25× under.
 - **Prices are the Claude API's own.** On Amazon Bedrock and Google Cloud the
   cloud provider sets the price, and a Google Cloud model id would be priced at
   Claude API rates, which can be lower than what you pay there.

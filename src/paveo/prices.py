@@ -118,6 +118,8 @@ INPUT_CLASSES = (
     "cache_write_5m",
     "cache_write_1h",
     "cache_write",
+    # Uncached prompt whose write count the response did not report (D115).
+    "input_unsplit",
 )
 OUTPUT_CLASS = "output"
 _KNOWN_CLASSES = frozenset({*INPUT_CLASSES, OUTPUT_CLASS})
@@ -371,8 +373,12 @@ _LONG_CONTEXT_TOKENS = 272_000
 
 # A class some adapters report under a name a row may not carry, and the row's
 # class it is charged at instead: OpenAI's single `cache_write`, arriving for a
-# Claude model through LiteLLM, is charged at Anthropic's dearer 1-hour write.
-_ALIASES: Mapping[str, str] = {"cache_write": "cache_write_1h"}
+# Claude model through LiteLLM, is charged at Anthropic's dearer 1-hour write;
+# `input_unsplit` off an OpenAI row is plain input (D115).
+_ALIASES: Mapping[str, str] = {
+    "cache_write": "cache_write_1h",
+    "input_unsplit": "input",
+}
 _LONG_INPUT = Decimal(2)
 _LONG_OUTPUT = Decimal("1.5")
 _OPENAI_CACHE_WRITE = Decimal("1.25")
@@ -670,18 +676,13 @@ class _PriceTable:
         it: an unset tier is reserved at the dearest, and settled at the truth.
         """
         row = self._served(self._row(rates), served or {})
-        usage = {
-            (
-                _ALIASES[name]
-                if name in _ALIASES and name not in row.per_token
-                else name
-            ): count
-            for name, count in usage.items()
-        }
+        usage = _aliased(usage, row)
+        # Sized by every count but output, so a class this table does not know
+        # can only move a call to the dearer long-context row (D115).
         prompt = sum(
             count
             for name, count in usage.items()
-            if name in INPUT_CLASSES
+            if name != OUTPUT_CLASS
             and _count_problem(count) is None
             and isinstance(count, int)
         )
@@ -909,6 +910,10 @@ def _openai_rows(
                 * (_OPENAI_CACHE_WRITE if listing.cache_write else 1),
                 OUTPUT_CLASS: Decimal(per_out) / _PER_MILLION * uplift,
             }
+            # A prompt whose writes were not reported: any token of it may have
+            # been a write, so all of it is charged as one, the same rate by
+            # construction (D115).
+            per_token["input_unsplit"] = per_token["cache_write"]
             key = f"{model}|service_tier={tier}{suffix}"
             rates = Rates(
                 model=model, rate_key=key, per_token=MappingProxyType(per_token)
@@ -972,6 +977,31 @@ def _not_a_count(where: str, problem: str) -> str:
         f"{where} is {problem}, which is not a token count: it must be a "
         f"non-negative int."
     )
+
+
+def _aliased(usage: Mapping[str, object], row: Rates) -> dict[str, object]:
+    """Usage under the names this row prices: a class it lacks moves to its
+    alias, and **counts landing on one name add** (D115), where a dict built by
+    name would keep only the last. They add only when every one of them is a
+    valid count; otherwise each keeps the name it came with, so the count check
+    in ``actual`` raises after the stale scan has seen every unknown class, and
+    no malformed count is lost to a valid one (/code-review)."""
+    groups: dict[str, list[tuple[str, object]]] = {}
+    for name, count in usage.items():
+        target = (
+            _ALIASES[name] if name in _ALIASES and name not in row.per_token else name
+        )
+        groups.setdefault(target, []).append((name, count))
+    moved: dict[str, object] = {}
+    for target, members in groups.items():
+        counts = [count for _, count in members]
+        if len(members) == 1:
+            moved[target] = counts[0]
+        elif all(isinstance(c, int) and _count_problem(c) is None for c in counts):
+            moved[target] = sum(c for c in counts if isinstance(c, int))
+        else:
+            moved.update(members)
+    return moved
 
 
 def _printable(name: object) -> str:

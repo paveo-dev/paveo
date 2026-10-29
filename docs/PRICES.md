@@ -50,6 +50,11 @@ the page retires.
 - `/api/docs/guides/your-data.md`: the data-residency list and uplift; a model
   that joins the list must get `regional=True`.
 - `/api/docs/guides/prompt-caching.md`: which models charge for cache writes.
+- OpenAI's SDK, the types generated from its API spec (raw from GitHub,
+  `openai-python`): `types/completion_usage.py` (any new field in
+  `prompt_tokens_details`, a lifetime split above all) and `prompt_cache_options`
+  in `types/chat/completion_create_params.py` (any lifetime besides `30m`).
+  Either one means pricing a new class (D115): until then Paveo stops on it.
 
 ### Gemini (`_GEMINI_LISTINGS`, `tests/test_gemini.py`)
 
