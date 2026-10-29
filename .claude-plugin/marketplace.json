@@ -1,6 +1,6 @@
 {
   "name": "paveo",
-  "description": "Paveo: rules for every AI coding agent your team runs, checked before each action.",
+  "description": "Paveo finds the dangerous commands your AI coding agent's guard lets through, and checks it again on every change.",
   "owner": { "name": "Paveo", "url": "https://paveo.dev" },
   "plugins": [
     {

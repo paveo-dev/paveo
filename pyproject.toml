@@ -10,7 +10,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "paveo"
 version = "0.1.12"
-description = "One set of rules for every AI coding agent your team runs: Claude Code, Codex and Cursor ask before shell commands and file writes, with a record that proves it."
+description = "Paveo finds the dangerous commands your AI coding agent's guard lets through, and checks it again on every change."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "MD Faiz Jamal" }]

@@ -1,29 +1,33 @@
 # Paveo
 
-**One set of rules for every AI coding agent your team runs.**
+**Paveo finds the dangerous commands your AI coding agent's guard lets through, and checks it again on every change.**
 
-Claude Code, Codex and Cursor ask Paveo before they run a shell command or
-write a file. `rm -rf`, `git push --force`, `DROP TABLE` and the obvious ways of
-editing the guard itself are refused, the agent is told why and tries something
-else, and every decision goes into a hash-chained record your security team can
-verify. It matches patterns, so it is a seatbelt, not a sandbox. The Cursor
-guard has not been tried in a real session yet, and by Cursor's documentation it
-may refuse every call ([details](#coding-agents-claude-code-codex-and-cursor)).
+Coding agents write the same dangerous command many ways: `rm -r -f`, `find
+-delete`, `sh -c '...'`. Many guards match text and catch only the ways their
+author tried. `uvx paveo test` sends your Claude Code guard
+68 spellings of five dangerous actions, the way Claude Code sends a call, and
+names each one that gets past it; `uvx paveo test codex` does the same for Codex, by Codex's rules (66
+spellings, since Codex has no Read tool, and as if each hook were trusted in
+Codex's `/hooks`, without which Codex runs none). In CI,
+`--expect` fails the build the day a guard stops stopping one
+([details](#test-the-hooks-you-already-have), [Codex](#codex-hooks)). (`uvx`
+comes with [uv](https://docs.astral.sh/uv/) and fetches a suitable Python
+itself.) For Claude Code, `uvx paveo doctor` names the hooks that cannot work as
+written, such as guards that can never block.
+
+Paveo also ships a guard of its own: Claude Code, Codex and
+Cursor ask it before they run a shell command or write a file. `rm -rf`, `git push
+--force`, `DROP TABLE` and the obvious ways of editing the guard itself are
+refused, the agent is told why, and every decision goes into a hash-chained record
+your security team can verify. It matches patterns, so it is a seatbelt, not a
+sandbox. The Cursor guard has not been tried in a real session yet, and by
+Cursor's documentation it may refuse every call
+([details](#coding-agents-claude-code-codex-and-cursor)).
 
 **Nothing leaves your machine.** Paveo runs on each engineer's machine, opens no
 network sockets (a test fails the build if it does), and installs no other package.
 It is open source under Apache-2.0, except the paid audit evidence export
 ([licence](#licence)), and free for up to three agents per policy.
-
-**First, check the guards you already have:** `uvx paveo doctor`, run in any
-project with Claude Code hooks, names the ones that cannot work as written, such
-as guards that can never block. (`uvx` comes with
-[uv](https://docs.astral.sh/uv/) and fetches a suitable Python itself.) Then
-`uvx paveo test` sends those hooks 68 spellings of five dangerous actions, the
-way Claude Code sends a call, and names each spelling that gets past them; in CI,
-`--expect` makes the build fail the day a guard stops stopping one
-([details](#test-the-hooks-you-already-have)). `uvx paveo test codex` does the
-same for a project's Codex hooks, by Codex's rules ([details](#codex-hooks)).
 
 ```
 pip install paveo            # Python 3.11+ (python3 --version), macOS or Linux
