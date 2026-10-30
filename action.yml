@@ -1,4 +1,4 @@
-# `uses: paveo-dev/paveo@v0.1.14`: run `paveo test` on this repository's Claude
+# `uses: paveo-dev/paveo@v0.1.15`: run `paveo test` on this repository's Claude
 # Code hooks, its Codex hooks or its Cursor hooks, and fail the job when a
 # dangerous action gets past them (D106, D111, D116).
 # Inputs reach the shell only as environment variables, never inside `run:`,
@@ -22,7 +22,7 @@ inputs:
     default: ""
   version:
     description: The paveo release to run, as x.y.z.
-    default: "0.1.14"
+    default: "0.1.15"
   json:
     description: Where to write the results as JSON.
     default: paveo-test.json

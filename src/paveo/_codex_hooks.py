@@ -34,6 +34,7 @@ import tomllib
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from . import _matcher_trial
 from ._bypasses import Spelling
 from ._doctor import _not_json, _read, _reason, parse_settings
 from ._guard_test import (
@@ -126,6 +127,8 @@ _NAMED_EVENTS = frozenset(_EVENTS) - {
     "SessionEnd",
 }
 _UNSUPPORTED = "printed an answer Codex does not support yet"
+# Codex sends every shell command as Bash, the one tool its spellings use.
+_CODEX_TOOLS = ("Bash",)
 
 
 def agent(shell: str) -> Agent:
@@ -133,7 +136,7 @@ def agent(shell: str) -> Agent:
     return Agent(
         title="Codex",
         nothing_found="no Codex hooks file found",
-        tools=frozenset({"Bash"}),
+        tools=frozenset(_CODEX_TOOLS),
         find=lambda files, _project, named: _find(files, named=named, shell=shell),
         call=_call,
         decide=lambda run, _handler: _decide(run),
@@ -394,23 +397,27 @@ def _handler(
     )
 
 
-def _reaches(matcher: object) -> tuple[Callable[[str], bool], str | None]:
+def _reaches(
+    matcher: object, names: Sequence[str] = _CODEX_TOOLS
+) -> tuple[Callable[[str], bool], str | None]:
     """Which tool names a matcher reaches, as Codex's ``HookMatcher`` reads it:
     empty or ``*`` is every tool; only letters, digits, ``_`` and ``|`` is a
-    list of exact names; anything else is a regex that may match anywhere."""
+    list of exact names; anything else is a regex that may match anywhere,
+    the repository's own, so it is tried in an isolated child with a time
+    limit, never here (``_matcher_trial``, D118)."""
     if not isinstance(matcher, str) or matcher in ("", "*"):  # None: no matcher
         return (lambda _tool: True), None
+    if len(matcher) > _matcher_trial.MAX_LENGTH:
+        return (lambda _tool: True), _matcher_trial.UNREAD
     if _NAMES.fullmatch(matcher):
-        names = set(matcher.split("|"))
-        return names.__contains__, None
-    unread = (lambda _tool: True), "its matcher is not a pattern paveo test can read"
+        listed = set(matcher.split("|"))
+        return listed.__contains__, None
     if _NOT_RUST.search(matcher):
-        return unread
-    try:
-        pattern = re.compile(matcher)
-    except (re.error, RecursionError, OverflowError):
-        return unread
-    return (lambda tool: pattern.search(tool) is not None), None
+        return (lambda _tool: True), _matcher_trial.UNREAD
+    hits = _matcher_trial.reach(matcher, names)
+    if isinstance(hits, str):
+        return (lambda _tool: True), hits
+    return hits.__contains__, None
 
 
 # --------------------------------------------------------------------------

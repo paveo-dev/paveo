@@ -49,6 +49,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TextIO
 
+from . import _matcher_trial
+
 # Claude Code sets no variable with these prefixes: the hooks reference lists the
 # ones it does set (CLAUDE_PROJECT_DIR, CLAUDE_ENV_FILE, CLAUDE_PLUGIN_*, ...),
 # and a hook it ran on 7 Oct 2026 saw no CLAUDE_TOOL_*, TOOL_* or CLAUDE_FILE_*.
@@ -376,9 +378,13 @@ _PYTHON_ONLY = re.compile(
 )
 
 
-def reaches_tools(matcher: object) -> tuple[Callable[[str], bool], str | None]:
-    """Which tool names a group's matcher reaches, as the reference's matcher
-    table says; a matcher that cannot be read reaches everything, untested."""
+def reaches_tools(  # noqa: PLR0911 - one return per rule
+    matcher: object, names: Sequence[str]
+) -> tuple[Callable[[str], bool], str | None]:
+    """Which of ``names`` a group's matcher reaches, as the reference's matcher
+    table says; a matcher that cannot be read reaches everything, untested. A
+    regular expression is the repository's own, so it is tried in an isolated
+    child with a time limit, never here (``_matcher_trial``, D118)."""
     if matcher is None or matcher in (
         "",
         "*",
@@ -386,17 +392,17 @@ def reaches_tools(matcher: object) -> tuple[Callable[[str], bool], str | None]:
         return (lambda _tool: True), None
     if not isinstance(matcher, str):
         return (lambda _tool: True), "its matcher is not text"
+    if len(matcher) > _matcher_trial.MAX_LENGTH:
+        return (lambda _tool: True), _matcher_trial.UNREAD
     if _NAMES_ONLY.fullmatch(matcher):
-        names = {name.strip() for name in re.split(r"[|,]", matcher)}
-        return names.__contains__, None
-    unread = (lambda _tool: True), "its matcher is not a pattern paveo test can read"
+        names_listed = {name.strip() for name in re.split(r"[|,]", matcher)}
+        return names_listed.__contains__, None
     if _PYTHON_ONLY.search(matcher):
-        return unread
-    try:
-        pattern = re.compile(matcher)
-    except (re.error, RecursionError, OverflowError):
-        return unread
-    return (lambda tool: pattern.search(tool) is not None), None
+        return (lambda _tool: True), _matcher_trial.UNREAD
+    hits = _matcher_trial.reach(matcher, names)
+    if isinstance(hits, str):
+        return (lambda _tool: True), hits
+    return hits.__contains__, None
 
 
 def runs_in_background(entry: dict[str, object]) -> bool:

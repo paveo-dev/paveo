@@ -61,3 +61,12 @@ KNOWN_GAPS = {
     f"R=rm; $R -rf /{_PROBE}": "a command hidden in a variable",
     f"rm -r /{_PROBE}": "`rm -r` without `-f`",
 }
+
+
+@pytest.fixture(autouse=True)
+def _fresh_matcher_budget() -> None:
+    """Each test is one run: a fresh budget for trying repository matchers
+    (D118), read from ``TIMEOUT_S`` at its first try, so a test may patch it."""
+    from paveo import _matcher_trial  # noqa: PLC0415 - fixture-local on purpose
+
+    _matcher_trial.reset()

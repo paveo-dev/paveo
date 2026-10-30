@@ -415,7 +415,7 @@ for a machine; the Action puts the report in the job summary):
 
 ```yaml
 - uses: actions/checkout@v7
-- uses: paveo-dev/paveo@v0.1.14
+- uses: paveo-dev/paveo@v0.1.15
   with:
     expect: force-push delete hard-reset clean
 ```
@@ -447,7 +447,12 @@ A stop that relies on `onFailure: "block"` holds on Claude Code v2.1.295 or late
 from plugins are not run yet either; they can stop more too, but one that defers
 would outrank an ask, so with plugins enabled an ask is not counted as a stop. It
 never prints a hook's command or
-output, only where the hook is. Run against Paveo's own starter it stops every spelling of the four actions the
+output, only where the hook is. A matcher that is a regular expression is the
+repository's own, so for every agent paveo compiles and tries it only in a
+separate, isolated Python, with 5 seconds for all of a run's matchers together:
+one not answered in time makes the run say it could not tell, and makes `paveo
+guard --selftest` count its hook as not seeing the call. A matcher longer than
+1,000 characters is not read at all. Run against Paveo's own starter it stops every spelling of the four actions the
 starter refuses but the ones "What the guard cannot do" names (a quoted
 verb, a flag or `rm` in a variable, `rm -r` without `-f`), and reports `.env` not
 guarded, since `init`'s hook does not watch Read.

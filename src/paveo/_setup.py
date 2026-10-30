@@ -29,6 +29,7 @@ from importlib import resources
 from pathlib import Path
 from typing import TextIO
 
+from . import _matcher_trial
 from ._doctor import misshapen, parse_settings, reaches_tools, runs_in_background
 from ._harnesses import (
     CLAUDE_CODE,
@@ -782,9 +783,12 @@ def _wiring(entry: dict[str, object]) -> tuple[str, ...]:
 
 def _covers(harness: Harness, matcher: object, reaches: Sequence[str] | None) -> bool:
     """Whether a hook's matcher reaches every tool in ``reaches`` (``None``:
-    every call). Claude Code's is read as ``paveo test`` reads it (names, else a
-    regular expression); Codex's and Cursor's are a regular expression,
-    searched. Absent, empty and ``*`` match everything."""
+    every call), read exactly as ``paveo test`` reads that agent's: Claude
+    Code's and Codex's as names, else a regular expression in the syntax each
+    takes; Cursor's as a JavaScript regular expression, searched. Absent, empty
+    and ``*`` match everything; one that cannot be read or tried covers
+    nothing. Each matcher is tried once against every tool its agent's events
+    name, so asking tool by tool costs one child (D118)."""
     if matcher is None or matcher in (
         "",
         "*",
@@ -792,14 +796,24 @@ def _covers(harness: Harness, matcher: object, reaches: Sequence[str] | None) ->
         return True
     if reaches is None or not isinstance(matcher, str):
         return False
+    events = {tool for event in harness.events for tool in event.reaches or ()}
+    tools = sorted(events | set(reaches))
     if harness.names_matcher:
-        reached, unread = reaches_tools(matcher)
-        return unread is None and all(map(reached, reaches))
-    try:
-        pattern = re.compile(matcher)
-    except re.error:
-        return False
-    return all(pattern.search(name) for name in reaches)
+        reached, unread = reaches_tools(matcher, tools)
+    elif harness.name == "codex":
+        # Imported here: the test's modules load the bypass list, which the
+        # guard never does; only init and --selftest come this way.
+        from ._codex_hooks import _reaches  # noqa: PLC0415
+
+        reached, unread = _reaches(matcher, tools)
+    else:
+        from ._cursor_hooks import _NOT_JS  # noqa: PLC0415 - as above
+
+        if len(matcher) > _matcher_trial.MAX_LENGTH or _NOT_JS.search(matcher):
+            return False
+        hits = _matcher_trial.reach(matcher, tools)
+        return not isinstance(hits, str) and all(name in hits for name in reaches)
+    return unread is None and all(map(reached, reaches))
 
 
 def _reads(hook: _Hook, home: Path) -> bool:

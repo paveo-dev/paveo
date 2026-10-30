@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from paveo import _cursor_hooks, cli
+from paveo import _cursor_hooks, _matcher_trial, cli
 from paveo._bypasses import ACTIONS
 from paveo._guard_test import Handler, Run, command, run_handler
 
@@ -464,7 +464,7 @@ def test_a_matcher_that_backtracks_for_minutes_makes_the_run_unsure_not_hang(
     """Each optional repeat doubles the work, so this one takes minutes per
     command; it is tried in a child given a limit, never in paveo itself (the
     second /code-review of D116)."""
-    monkeypatch.setattr(_cursor_hooks, "_MATCH_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(_matcher_trial, "TIMEOUT_S", 0.5)
     hooks = {
         SHELL_EVENT: [
             {"command": "slow", "matcher": ".?" * 40 + "Q"},
@@ -572,7 +572,7 @@ def test_a_slow_tool_name_matcher_cannot_hang_the_run_either(
 ) -> None:
     """Measured at 3.6 s over the five letters of `Shell` with 80 repeats, and
     doubling: tried in a child too (the third /code-review of D116)."""
-    monkeypatch.setattr(_cursor_hooks, "_MATCH_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(_matcher_trial, "TIMEOUT_S", 0.5)
     hooks = {TOOL_EVENT: [{"command": "guard", "matcher": "(?:.?){400}Q"}]}
     started = time.monotonic()
     code, out = _test(tmp_path, [_hooks_json(tmp_path, hooks)], _judge(_deny))
@@ -584,7 +584,7 @@ def test_a_slow_tool_name_matcher_cannot_hang_the_run_either(
 def test_a_slow_project_matcher_leaves_the_organisation_s_tested(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(_cursor_hooks, "_MATCH_TIMEOUT_S", 3.0)
+    monkeypatch.setattr(_matcher_trial, "TIMEOUT_S", 3.0)
     project = tmp_path / "repo"
     organisation = tmp_path / "org" / "hooks.json"
     organisation.parent.mkdir()
@@ -613,26 +613,24 @@ def test_a_matcher_never_tried_is_could_not_tell_never_not_guarded() -> None:
     assert found.handlers[0].untestable == _cursor_hooks._NOT_TRIED
 
     def refuse(
-        wanted: list[tuple[str, str]], _texts: dict[str, list[str]], _timeout: float
+        wanted: list[tuple[str, str]], _texts: dict[str, list[str]]
     ) -> list[str]:
-        return [_cursor_hooks._FAILED] * len(wanted)
+        return [_matcher_trial.FAILED] * len(wanted)
 
     _cursor_hooks._try_matchers(found, pending, try_all=refuse)
     (after,) = found.handlers
-    assert after.untestable == _cursor_hooks._FAILED
+    assert after.untestable == _matcher_trial.FAILED
     assert after.reaches(ACTIONS[0].spellings[0])
 
 
 def test_the_child_answers_in_order_and_says_which_python_cannot_read() -> None:
     texts = {SHELL_EVENT: ["rm -rf x", "ls"], TOOL_EVENT: ["Shell"]}
-    answers = _cursor_hooks._try_all(
-        [("rm", SHELL_EVENT), ("(?<name>x)", SHELL_EVENT), ("Sh", TOOL_EVENT)],
-        texts,
-        5.0,
+    answers = _matcher_trial.try_all(
+        [("rm", SHELL_EVENT), ("(?<name>x)", SHELL_EVENT), ("Sh", TOOL_EVENT)], texts
     )
     assert answers == [
         frozenset({"rm -rf x"}),
-        _cursor_hooks._UNREAD,
+        _matcher_trial.UNREAD,
         frozenset({"Shell"}),
     ]
 

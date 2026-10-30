@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "paveo"
-version = "0.1.14"
+version = "0.1.15"
 description = "Paveo finds the dangerous commands your AI coding agent's guard lets through, and checks it again on every change."
 readme = "README.md"
 requires-python = ">=3.11"

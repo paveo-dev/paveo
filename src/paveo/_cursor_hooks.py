@@ -36,12 +36,11 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
-import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from . import _matcher_trial
 from ._bypasses import ACTIONS, ORDINARY, Spelling
 from ._doctor import _not_json, _reason, parse_settings
 from ._guard_test import (
@@ -64,38 +63,9 @@ _TOOLS = {"Bash": "Shell"}
 # read Python's way. One flagged here that JavaScript would take only makes
 # the run unsure.
 _NOT_JS = re.compile(r"\(\?(?:P|#|>|[aiLmsux-]+[):])|\\[AZ]|[*+?}]\+|\{,|\[\^?\]")
-# A matcher is a project's own regex, and Python's can take minutes to compile
-# or try, even over the five letters of ``Shell``. So all of them are compiled
-# and tried in one child Python, isolated (-I) so a project's files cannot
-# stand in for ``re``, one answer a line, in order: the organisation's and the
-# person's before the project's. The parent reads answers for this long; each
-# matcher not answered by then is not run, and the run cannot tell.
-_MATCH_TIMEOUT_S = 5.0
-# Each answer is the indexes of the texts found; null for a pattern Python
-# refuses; false for any other failure, which costs only that matcher.
-_TRY = (
-    "import json, re, sys\n"
-    "d = json.load(sys.stdin)\n"
-    "for matcher, event in d['matchers']:\n"
-    "    texts = d['texts'][event]\n"
-    "    try:\n"
-    "        pattern = re.compile(matcher)\n"
-    "    except (re.error, RecursionError, OverflowError):\n"
-    "        print('null', flush=True)\n"
-    "        continue\n"
-    "    try:\n"
-    "        found = [i for i, t in enumerate(texts) if pattern.search(t)]\n"
-    "    except Exception:\n"
-    "        print('false', flush=True)\n"
-    "        continue\n"
-    "    print(json.dumps(found), flush=True)\n"
-)
 # Until it is tried, a matcher reaches every call and cannot be told, so a
 # hook whose matcher is never tried says so, never "not guarded".
 _NOT_TRIED = "its matcher was not tried"
-_UNREAD = "its matcher is not a pattern paveo test can read"
-_LATE = "its matcher could not be tried in time, so it is not run"
-_FAILED = "its matcher could not be tried, so it is not run"
 _TYPES = ("command", "prompt")
 _PERMISSION: dict[str, dict[str, Decision]] = {
     _SHELL_EVENT: {"deny": "block", "ask": "ask", "allow": "none"},
@@ -272,8 +242,16 @@ def _matched(
     (preToolUse)."""
     if matcher is None or matcher in ("", "*"):
         return handler
-    if not isinstance(matcher, str) or _NOT_JS.search(matcher):
-        return handler if handler.untestable else _untestable(handler, _UNREAD)
+    if (
+        not isinstance(matcher, str)
+        or len(matcher) > _matcher_trial.MAX_LENGTH
+        or _NOT_JS.search(matcher)
+    ):
+        return (
+            handler
+            if handler.untestable
+            else _untestable(handler, _matcher_trial.UNREAD)
+        )
     placeholder = handler.untestable is None
     pending[handler.where] = _Pending(matcher, handler.event, placeholder)
     return _untestable(handler, _NOT_TRIED) if placeholder else handler
@@ -291,65 +269,15 @@ def _among(hits: frozenset[str], event: str) -> Callable[[Spelling], bool]:
     return lambda spelling: _TOOLS[spelling.tool] in hits
 
 
-def _try_all(
-    wanted: list[tuple[str, str]],
-    texts: dict[str, list[str]],
-    timeout: float,
-) -> list[frozenset[str] | str]:
-    """For each (matcher, event), in order, the texts of that event it finds,
-    or why that could not be told: one isolated child for all, ended at
-    ``timeout``, its answers so far kept."""
-    payload = json.dumps({"matchers": wanted, "texts": texts}).encode()
-    late = False
-    try:
-        done = subprocess.run(  # noqa: S603 - this interpreter, isolated, our program
-            [sys.executable, "-I", "-c", _TRY],
-            input=payload,
-            capture_output=True,
-            timeout=timeout,
-            check=False,
-        )
-        lines = done.stdout.splitlines()
-    except subprocess.TimeoutExpired as e:
-        late = True
-        # A line cut off mid-write is no answer.
-        lines = (e.stdout or b"").split(b"\n")[:-1]
-    except (OSError, ValueError):  # ValueError: no interpreter to name
-        lines = []
-    answers = [
-        _answered(line, texts[event])
-        for line, (_matcher, event) in zip(lines, wanted, strict=False)
-    ]
-    return answers + [_LATE if late else _FAILED] * (len(wanted) - len(answers))
-
-
-def _answered(line: bytes, texts: list[str]) -> frozenset[str] | str:
-    """One line of the child's answer: the indexes of the texts found, or
-    null for a pattern Python does not read."""
-    try:
-        found = json.loads(line)
-    except ValueError:
-        return _FAILED
-    if found is None:
-        return _UNREAD
-    if found is False:
-        return _FAILED
-    if not (
-        isinstance(found, list)
-        and all(type(i) is int and 0 <= i < len(texts) for i in found)
-    ):
-        return _FAILED
-    return frozenset(texts[i] for i in found)
-
-
 def _try_matchers(
     found: Found,
     pending: dict[str, _Pending],
     *,
     try_all: Callable[
-        [list[tuple[str, str]], dict[str, list[str]], float],
+        [Sequence[tuple[str, str]], Mapping[str, Sequence[str]]],
         list[frozenset[str] | str],
-    ] = _try_all,
+    ]
+    | None = None,
 ) -> None:
     """Give each hook in ``pending`` the calls its matcher reaches. A try
     that does not answer leaves the hook could-not-tell (Rule 14: the child
@@ -365,7 +293,9 @@ def _try_matchers(
     }
     # In the order the files were read: the project's own last.
     keys = list(dict.fromkeys((each.matcher, each.event) for each in pending.values()))
-    answers = dict(zip(keys, try_all(keys, texts, _MATCH_TIMEOUT_S), strict=True))
+    # Resolved here, not as a default, so one patch reaches all three agents.
+    tried = (try_all or _matcher_trial.try_all)(keys, texts)
+    answers = dict(zip(keys, tried, strict=True))
     for i, handler in enumerate(found.handlers):
         wanted = pending.get(handler.where)
         if wanted is None:

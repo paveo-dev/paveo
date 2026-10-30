@@ -316,6 +316,14 @@ wrong type) each make the run say it could not tell, never pass. A settings file
 past the parser's limit or a NUL byte in a command is reported, not a crash. Its output is read to 1 MiB and never printed, nor is its command
 (either can hold a token); only file paths are, with control characters escaped.
 `http` hooks are never run, so the command still opens no socket of its own.
+→ **Matchers, every agent (D118).** A hook's matcher is a regular expression from the
+project's own settings, and Python's can backtrack for minutes, so neither `paveo test`
+(Claude Code, Codex, Cursor) nor `--selftest` compiles or tries one in its own process:
+a child Python, isolated with `-I`, does, and every child in one run shares one
+5-second budget, so a thousand slow matchers cost five seconds; a matcher not
+answered in time is could-not-tell in a test and covers nothing in a self-test. A
+matcher over 1,000 characters is not read, which also keeps paveo's own checks of
+a pattern's text quick.
 → **Cursor (D116).** `paveo test cursor` runs the hooks in the organisation's,
 the person's and the project's Cursor `hooks.json`, each in `/bin/sh`, a person's
 from `~/.cursor` and an organisation's from its file's folder, as Cursor starts

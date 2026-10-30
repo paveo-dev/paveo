@@ -56,7 +56,7 @@ from functools import partial
 from pathlib import Path
 from typing import BinaryIO, TextIO
 
-from . import _doctor, _mcp, enforce
+from . import _doctor, _matcher_trial, _mcp, enforce
 from ._harnesses import (
     CLAUDE_CODE,
     CODEX,
@@ -149,6 +149,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # noqa: PLR0911 - a return 
         )
     if arguments.selftest:
         project = Path.cwd()
+        _matcher_trial.reset()  # one command, one budget (D118)
         harness = HARNESSES[arguments.harness or CLAUDE_CODE.name]
         return selftest(
             harness,
@@ -609,6 +610,8 @@ def _test(arguments: argparse.Namespace) -> int:
         sys.stderr.write(f"paveo: {e}\n")
         return 2
     project = Path.cwd()
+    # One command, one run: its matchers share a fresh budget (D118).
+    _matcher_trial.reset()
     codex = arguments.harness == CODEX.name
     cursor = arguments.harness == CURSOR.name
     # Codex sets no project variable (D57): a hook that reads Claude Code's is

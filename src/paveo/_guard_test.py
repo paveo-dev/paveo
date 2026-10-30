@@ -113,6 +113,8 @@ _LEGACY: dict[str, Decision] = {"block": "block", "approve": "none"}
 _TIMED_OUT = "did not answer in time"
 _LEFT_RUNNING = "could not be stopped (the system refused), so it was left running"
 _ASK_STOPS = {mode for mode, stops in PERMISSION_MODES.items() if stops}
+# The tools Claude Code's spellings use, which a matcher is tried against.
+_CLAUDE_TOOLS = ("Bash", "Read")
 
 
 @dataclass(frozen=True)
@@ -693,7 +695,7 @@ def _read_hooks(path: Path, hooks: object, *, project: Path, found: Found) -> No
         if not isinstance(group, dict) or not isinstance(entries, list):
             found.unread.append(f"{path}: PreToolUse[{g}] has no list of hooks")
             continue
-        tool_reaches, unreadable = reaches_tools(group.get("matcher"))
+        tool_reaches, unreadable = reaches_tools(group.get("matcher"), _CLAUDE_TOOLS)
         reaches = by_tool(tool_reaches)
         for h, entry in enumerate(entries):
             where = f"{path}: PreToolUse[{g}].hooks[{h}]"
@@ -820,7 +822,7 @@ def _named(spelling: Spelling) -> str:
 CLAUDE_CODE = Agent(
     title="Claude Code",
     nothing_found="no Claude Code settings file found",
-    tools=frozenset({"Bash", "Read"}),
+    tools=frozenset(_CLAUDE_TOOLS),
     find=_find,
     call=_call,
     decide=_decide,
