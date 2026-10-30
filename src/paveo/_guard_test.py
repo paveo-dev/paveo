@@ -1,11 +1,12 @@
 """``paveo test``: whether a project's own Claude Code hooks stop the dangerous
-actions, however they are spelled (D102). Codex's hooks are tested the same
-way with Codex's rules (``_codex_hooks``, D111); this module describes Claude
-Code's, and the run both share.
+actions, however they are spelled (D102). Codex's and Cursor's hooks are
+tested the same way with their own rules (``_codex_hooks``, D111;
+``_cursor_hooks``, D116); this module describes Claude Code's, and the run all
+three share.
 
 ::
 
-    paveo test [codex] [--expect ACTION ...] [--settings FILE ...] [--json FILE]
+    paveo test [codex|cursor] [--expect ACTION ...] [--settings FILE ...] [--json FILE]
 
 Each spelling in ``_bypasses`` is sent to every ``PreToolUse`` hook whose matcher
 reaches it, as the JSON Claude Code sends, and each answer is read the way Claude
@@ -116,17 +117,25 @@ _ASK_STOPS = {mode for mode, stops in PERMISSION_MODES.items() if stops}
 
 @dataclass(frozen=True)
 class Handler:
-    """One command hook, as Claude Code would run it."""
+    """One command hook, as its agent would run it."""
 
     where: str
-    reaches: Callable[[str], bool]
+    # Whether its matcher reaches this call: by the tool's name, or, for
+    # Cursor's beforeShellExecution, by the command itself.
+    reaches: Callable[[Spelling], bool]
     argv: tuple[str, ...]
     timeout: float
     blocks_on_failure: bool
-    # Why it cannot be run as Claude Code would run it, or None.
+    # Why it cannot be run as its agent would run it, or None.
     untestable: str | None = None
     # Its own time limit is longer than the one paveo test gives it.
     capped: bool = False
+    # The event it answers, which decides the call it is sent and, in Cursor,
+    # whether its ask reaches a person.
+    event: str = "PreToolUse"
+    # Where its agent starts it; None is the project. Cursor starts a user's
+    # hooks in ~/.cursor, and an organisation's in that file's folder.
+    cwd: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -180,6 +189,8 @@ class _Tally:
     # Of those, the ones the system would not let us stop (D103); an uncapped
     # one says so in its failure line instead.
     left_running: set[str] = field(default_factory=set)
+    # The spellings some hook answered ask to, whatever the verdict became.
+    asked: set[str] = field(default_factory=set)
 
 
 Runner = Callable[[Handler, bytes], Run]
@@ -195,8 +206,19 @@ class Agent:
     # The tools it has, of those the list's spellings use.
     tools: frozenset[str]
     find: Callable[[Sequence[Path], Path, bool], Found]  # files, project, named
-    call: Callable[[Spelling, Path, str], bytes]  # spelling, project, mode
-    decide: Callable[[Run, bool], tuple[Decision, str | None]]  # blocks on failure
+    call: Callable[[Spelling, Path, str, str], bytes]  # spelling, project, mode, event
+    decide: Callable[[Run, Handler], tuple[Decision, str | None]]
+    # The events whose command hooks it runs, as a sentence names them.
+    hook_names: str
+    # Whether a hook's ask is known to reach a person, and so is a stop;
+    # otherwise an ask is could-not-tell.
+    asks_stop: bool
+    # Each agent states these, so none is left blank by being forgotten: why
+    # the spellings that use Claude Code's Read tool are left out, what an ask
+    # means, and what a hook that fails closed did.
+    without_read: str
+    ask_note: str
+    failed_closed: str
 
 
 @dataclass(frozen=True)
@@ -244,7 +266,7 @@ def command(  # noqa: PLR0913 - each is an input the command line decides
         out.write(f"paveo: {_shown(found.disabled)}\n")
         handlers = []
     elif not handlers and found.read:
-        out.write("paveo: no PreToolUse command hook found.\n")
+        out.write(f"paveo: no {agent.hook_names} command hook found.\n")
     tally = _Tally()
     probe = _Probe(
         agent, project, run, tally, unseen=found.plugins_on, mode=found.default_mode
@@ -257,12 +279,12 @@ def command(  # noqa: PLR0913 - each is an input the command line decides
         name: [_verdict(s, handlers, probe) for s in spellings]
         for name, spellings in tested.items()
     }
+    stops: set[Decision] = {"block", "ask"} if agent.asks_stop else {"block"}
     ordinary_stopped = [
         _named(spelling)
         for spelling in ORDINARY
         if spelling.tool in agent.tools
-        and _verdict(spelling, handlers, replace(probe, unseen=False))
-        in {"block", "ask"}
+        and _verdict(spelling, handlers, replace(probe, unseen=False)) in stops
     ]
     spellings = sum(len(each) for each in tested.values())
     out.write(
@@ -273,7 +295,7 @@ def command(  # noqa: PLR0913 - each is an input the command line decides
         found,
         handlers,
         tally,
-        title=agent.title,
+        agent=agent,
         present=present,
         ordinary=ordinary_stopped,
     )
@@ -281,19 +303,26 @@ def command(  # noqa: PLR0913 - each is an input the command line decides
     if left_out:
         notes.append(
             f"{left_out} spellings that use Claude Code's Read tool are left out: "
-            f"{agent.title} has no such tool, and reads files through its shell."
+            f"{agent.without_read}"
         )
-    if any("ask" in verdicts for verdicts in results.values()):
-        notes.append(
-            "an ask is counted as a stop, which holds in a session that starts "
-            "in default (manual), plan, acceptEdits or dontAsk mode; one started "
-            "with --dangerously-skip-permissions, --permission-mode "
-            "bypassPermissions or in auto mode asks no one."
-        )
+    # Where an ask is no stop, it is said even when another hook already made
+    # that spelling could-not-tell.
+    asked = any(
+        spelling.text in tally.asked for each in tested.values() for spelling in each
+    )
+    counted = any("ask" in verdicts for verdicts in results.values())
+    if counted or (asked and not agent.asks_stop):
+        notes.append(agent.ask_note)
     out.writelines(f"  note: {_shown(line)}\n" for line in notes)
     out.write("\n")
     outcomes = [
-        _outcome(name, tested[name], results[name], expected=name in expect)
+        _outcome(
+            name,
+            tested[name],
+            results[name],
+            expected=name in expect,
+            asks_stop=agent.asks_stop,
+        )
         for name in tested
     ]
     walked = [outcome.name for outcome in outcomes if _report(outcome, out)]
@@ -335,13 +364,13 @@ def _notes(  # noqa: PLR0913 - each is a separate thing the run could not see
     handlers: Sequence[Handler],
     tally: _Tally,
     *,
-    title: str,
+    agent: Agent,
     present: Sequence[Path],
     ordinary: Sequence[str],
 ) -> list[str]:
     """Everything the run could not see or could not trust, said before the
     results it qualifies."""
-    notes = [*found.notes, *_failure_notes(handlers, tally, title=title)]
+    notes = [*found.notes, *_failure_notes(handlers, tally, agent=agent)]
     if found.permission_rules:
         notes.append(
             "Claude Code's own permission rules are not tested yet: a spelling "
@@ -390,14 +419,18 @@ def _outcome(
     verdicts: list[Decision],
     *,
     expected: bool,
+    asks_stop: bool,
 ) -> _Outcome:
+    """An ask is a stop only where it is known to reach a person; elsewhere
+    the run cannot tell."""
+    asked = verdicts.count("ask")
     return _Outcome(
         name=name,
         expected=expected,
         spellings=len(verdicts),
-        stopped=sum(v in {"block", "ask"} for v in verdicts),
-        asked=verdicts.count("ask"),
-        unknown=verdicts.count("unknown"),
+        stopped=verdicts.count("block") + (asked if asks_stop else 0),
+        asked=asked if asks_stop else 0,
+        unknown=verdicts.count("unknown") + (0 if asks_stop else asked),
         passing=tuple(
             _named(s) for s, v in zip(spellings, verdicts, strict=True) if v == "none"
         ),
@@ -429,22 +462,27 @@ def _report(outcome: _Outcome, out: TextIO) -> bool:
 def _verdict(
     spelling: Spelling, handlers: Sequence[Handler], probe: _Probe
 ) -> Decision:
-    """What Claude Code would do with this call, of every hook that reaches it:
-    precedence is ``deny`` > ``defer`` > ``ask`` > ``allow``, and ``defer`` is
-    ignored outside ``claude -p``, so what an ask means beside a defer cannot
-    be told, nor beside a hook that was not run (plugins' hooks, which reach
-    every call for all this can tell), which might defer."""
-    payload = probe.agent.call(spelling, probe.project, probe.mode)
+    """What the agent would do with this call, of every hook that reaches it:
+    precedence is ``deny`` > ``defer`` > ``ask`` > ``allow`` (Cursor has the
+    same order, without defer), and ``defer`` is ignored outside ``claude -p``,
+    so what an ask means beside a defer cannot be told, nor beside a hook that
+    was not run (plugins' hooks, which reach every call for all this can
+    tell), which might defer."""
+    payloads: dict[str, bytes] = {}
     tally = probe.tally
     decisions: set[Decision] = set()
     for handler in handlers:
-        if not handler.reaches(spelling.tool):
+        if not handler.reaches(spelling):
             continue
         if handler.untestable is not None or handler.where in tally.timed_out:
             decisions.add("unknown")
             continue
         tally.calls[handler.where] += 1
-        answer = probe.run(handler, payload)
+        if handler.event not in payloads:
+            payloads[handler.event] = probe.agent.call(
+                spelling, probe.project, probe.mode, handler.event
+            )
+        answer = probe.run(handler, payloads[handler.event])
         if answer.timed_out:
             tally.timed_out.add(handler.where)
         if answer.timed_out and handler.capped:
@@ -454,21 +492,23 @@ def _verdict(
             decision: Decision = "unknown"
             failure: str | None = None
         else:
-            decision, failure = probe.agent.decide(answer, handler.blocks_on_failure)
+            decision, failure = probe.agent.decide(answer, handler)
         if failure is not None:
             tally.failures.setdefault(handler.where, Counter())[failure] += 1
         decisions.add(decision)
     if "block" in decisions:
         return "block"
     if "ask" in decisions:
+        tally.asked.add(spelling.text)
         unsure = {"defer", "unknown"} & decisions or probe.unseen
         return "unknown" if unsure or probe.mode not in _ASK_STOPS else "ask"
     return "unknown" if "unknown" in decisions else "none"
 
 
-def _decide(run: Run, blocks_on_failure: bool) -> tuple[Decision, str | None]:
+def _decide(run: Run, handler: Handler) -> tuple[Decision, str | None]:
     """One hook's answer to one call, and why it failed if it did; the table in
     the reference's "Exit code output" section."""
+    blocks_on_failure = handler.blocks_on_failure
     failure = run.failure
     if failure is None and run.exit == 2:  # noqa: PLR2004 - Claude Code's block code
         return "block", None
@@ -548,7 +588,7 @@ def _typed(fields: dict[str, object], types: dict[str, type]) -> bool:
     )
 
 
-def _call(spelling: Spelling, project: Path, mode: str) -> bytes:
+def _call(spelling: Spelling, project: Path, mode: str, _event: str) -> bytes:
     """The PreToolUse input Claude Code sends for this spelling."""
     if spelling.tool == "Read":
         tool_input: dict[str, object] = {"file_path": str(project / spelling.text)}
@@ -569,7 +609,7 @@ def _call(spelling: Spelling, project: Path, mode: str) -> bytes:
 
 
 def _failure_notes(
-    handlers: Sequence[Handler], tally: _Tally, *, title: str
+    handlers: Sequence[Handler], tally: _Tally, *, agent: Agent
 ) -> list[str]:
     notes = [
         f"{handler.where} is not run: {handler.untestable}"
@@ -594,10 +634,9 @@ def _failure_notes(
         failed = sum(failures.values())
         why = ", ".join(f"{reason} ({n})" for reason, n in failures.most_common())
         effect = (
-            "it sets onFailure block, so each one was stopped (Claude Code "
-            "v2.1.295 or later; an earlier one lets the call through)"
+            agent.failed_closed
             if handler.blocks_on_failure
-            else f"{title} lets a call through when its hook fails"
+            else f"{agent.title} lets a call through when its hook fails"
         )
         skipped = (
             "; it timed out, so it was not run for the calls after that"
@@ -654,7 +693,8 @@ def _read_hooks(path: Path, hooks: object, *, project: Path, found: Found) -> No
         if not isinstance(group, dict) or not isinstance(entries, list):
             found.unread.append(f"{path}: PreToolUse[{g}] has no list of hooks")
             continue
-        reaches, unreadable = reaches_tools(group.get("matcher"))
+        tool_reaches, unreadable = reaches_tools(group.get("matcher"))
+        reaches = by_tool(tool_reaches)
         for h, entry in enumerate(entries):
             where = f"{path}: PreToolUse[{g}].hooks[{h}]"
             if not isinstance(entry, dict):
@@ -679,7 +719,7 @@ def _read_hooks(path: Path, hooks: object, *, project: Path, found: Found) -> No
 def _handler(
     where: str,
     entry: dict[str, object],
-    reaches: Callable[[str], bool],
+    reaches: Callable[[Spelling], bool],
     *,
     project: Path,
 ) -> Handler | None:
@@ -760,6 +800,11 @@ def user_profiles(folder: Path, name: str) -> list[Path]:
     return [Path(user) / name for user in users]
 
 
+def by_tool(tool_reaches: Callable[[str], bool]) -> Callable[[Spelling], bool]:
+    """A matcher read against the tool's name, as Claude Code and Codex read it."""
+    return lambda spelling: tool_reaches(spelling.tool)
+
+
 def _untestable(handler: Handler, why: str) -> Handler:
     return replace(handler, untestable=why)
 
@@ -779,6 +824,19 @@ CLAUDE_CODE = Agent(
     find=_find,
     call=_call,
     decide=_decide,
+    hook_names="PreToolUse",
+    asks_stop=True,
+    without_read="Claude Code has a Read tool, so none is left out.",
+    ask_note=(
+        "an ask is counted as a stop, which holds in a session that starts "
+        "in default (manual), plan, acceptEdits or dontAsk mode; one started "
+        "with --dangerously-skip-permissions, --permission-mode "
+        "bypassPermissions or in auto mode asks no one."
+    ),
+    failed_closed=(
+        "it sets onFailure block, so each one was stopped (Claude Code "
+        "v2.1.295 or later; an earlier one lets the call through)"
+    ),
 )
 
 
@@ -821,7 +879,7 @@ def run_handler(  # noqa: PLR0913 - the clock and pause are injected (Rule 14)
             stdin=call_in,
             stdout=answer_out,
             stderr=said_out,
-            cwd=project,
+            cwd=handler.cwd or project,
             env=dict(env),
             start_new_session=True,
         )

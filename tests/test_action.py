@@ -34,15 +34,19 @@ def _job(
     """``action/test.sh`` as the Action's second step runs it, against a
     project whose one hook is ``guard``, a shell script, in ``agent``'s folder."""
     project, home, bin_dir = (tmp_path / d for d in ("project", "home", "bin"))
-    folder = project / (".codex" if agent == "codex" else ".claude")
+    folder = project / {"codex": ".codex", "cursor": ".cursor"}.get(agent, ".claude")
     for each in (folder, home, bin_dir):
         each.mkdir(parents=True)
     hook = folder / "guard.sh"
     hook.write_text(f"#!/bin/sh\ninput=$(cat)\n{guard}\nexit 0\n")
     hook.chmod(0o755)
     entry = {"type": "command", "command": str(hook)}
-    settings = {"hooks": {"PreToolUse": [{"matcher": "Bash|Read", "hooks": [entry]}]}}
-    name = "hooks.json" if agent == "codex" else "settings.json"
+    settings: dict[str, object] = {
+        "hooks": {"PreToolUse": [{"matcher": "Bash|Read", "hooks": [entry]}]}
+    }
+    if agent == "cursor":
+        settings = {"version": 1, "hooks": {"beforeShellExecution": [entry]}}
+    name = "settings.json" if agent == "claude-code" else "hooks.json"
     (folder / name).write_text(json.dumps(settings))
     paveo_command = bin_dir / "paveo"
     paveo_command.write_text(
@@ -122,3 +126,12 @@ def test_an_agent_the_action_does_not_know_stops_before_anything_runs(
     code, out, _ = _job(tmp_path, "exit 2", "", agent="cursor; touch x")
     assert code == 2  # not an agent the Action knows: could not tell
     assert "paveo test:" not in out
+
+
+def test_the_cursor_agent_tests_cursor_hooks_by_cursor_s_rules(tmp_path: Path) -> None:
+    # In Cursor, exit 2 stops a command with nothing on stderr.
+    guard = f'case "$input" in *{PROBE}*|*.env*) exit 2;; esac'
+    code, out, _ = _job(tmp_path, guard, "delete clean", agent="cursor")
+    assert code == 0, out
+    assert "delete      stopped" in out
+    assert "trusted workspace" in out

@@ -45,6 +45,7 @@ from ._guard_test import (
     Handler,
     Run,
     _untestable,
+    by_tool,
 )
 
 # Every event Codex reads from a hooks file. A group under any of them that
@@ -135,7 +136,14 @@ def agent(shell: str) -> Agent:
         tools=frozenset({"Bash"}),
         find=lambda files, _project, named: _find(files, named=named, shell=shell),
         call=_call,
-        decide=lambda run, _blocks_on_failure: _decide(run),
+        decide=lambda run, _handler: _decide(run),
+        hook_names="PreToolUse",
+        # Codex reads an ask but does not support it: _decide reads it as the
+        # hook failing, so no verdict here is ever an ask.
+        asks_stop=False,
+        without_read="Codex has no such tool, and reads files through its shell.",
+        ask_note="Codex does not support ask yet, so an ask is never a stop.",
+        failed_closed="Codex has no way for a hook to fail closed.",
     )
 
 
@@ -329,7 +337,8 @@ def _read_groups(
     for g, group in enumerate(groups):
         if not isinstance(group, dict):
             continue
-        reaches, unreadable = _reaches(group.get("matcher"))
+        tool_reaches, unreadable = _reaches(group.get("matcher"))
+        reaches = by_tool(tool_reaches)
         entries = group.get("hooks", [])
         for h, entry in enumerate(entries if isinstance(entries, list) else []):
             if not isinstance(entry, dict):
@@ -365,7 +374,7 @@ def _read_groups(
 def _handler(
     where: str,
     entry: dict[str, object],
-    reaches: Callable[[str], bool],
+    reaches: Callable[[Spelling], bool],
     *,
     shell: str,
 ) -> Handler:
@@ -409,7 +418,7 @@ def _reaches(matcher: object) -> tuple[Callable[[str], bool], str | None]:
 # --------------------------------------------------------------------------
 
 
-def _call(spelling: Spelling, project: Path, _mode: str) -> bytes:
+def _call(spelling: Spelling, project: Path, _mode: str, _event: str) -> bytes:
     """The PreToolUse input Codex sends for a shell command (schema.rs)."""
     return json.dumps(
         {

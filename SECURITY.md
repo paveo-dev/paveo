@@ -59,7 +59,9 @@ Overclaiming is itself a security problem, so:
 - **`paveo test` runs your project's hooks; nothing else in Paveo does.** It
   starts each PreToolUse command hook in your Claude Code settings (or, with
   `paveo test codex`, your Codex hook files, each in your login shell as Codex
-  runs it), with your environment and the project as its folder, to see whether it stops bypass
+  runs it; with `paveo test cursor`, your Cursor hook files, each in `/bin/sh`,
+  from the folder Cursor starts it in), with your environment and the project
+  as its folder unless Cursor starts it elsewhere, to see whether it stops bypass
   spellings of dangerous commands: run it where you would run the project's own
   tests. The commands it hands a hook are harmless if the hook ran them. A hook
   still running after 10 seconds is killed with every process it started. It

@@ -8,9 +8,12 @@ author tried. `uvx paveo test` sends your Claude Code guard
 68 spellings of five dangerous actions, the way Claude Code sends a call, and
 names each one that gets past it; `uvx paveo test codex` does the same for Codex, by Codex's rules (66
 spellings, since Codex has no Read tool, and as if each hook were trusted in
-Codex's `/hooks`, without which Codex runs none). In CI,
+Codex's `/hooks`, without which Codex runs none); `uvx paveo test cursor` does the
+same for Cursor, by the rules on Cursor's hooks page (not yet checked in a real
+Cursor session). In CI,
 `--expect` fails the build the day a guard stops stopping one
-([details](#test-the-hooks-you-already-have), [Codex](#codex-hooks)). (`uvx`
+([details](#test-the-hooks-you-already-have), [Codex](#codex-hooks),
+[Cursor](#cursor-hooks)). (`uvx`
 comes with [uv](https://docs.astral.sh/uv/) and fetches a suitable Python
 itself.) For Claude Code, `uvx paveo doctor` names the hooks that cannot work as
 written, such as guards that can never block.
@@ -412,7 +415,7 @@ for a machine; the Action puts the report in the job summary):
 
 ```yaml
 - uses: actions/checkout@v7
-- uses: paveo-dev/paveo@v0.1.13
+- uses: paveo-dev/paveo@v0.1.14
   with:
     expect: force-push delete hard-reset clean
 ```
@@ -482,6 +485,46 @@ read. **Codex runs a hook only once someone has trusted it in `/hooks`, and a
 project's only in a trusted project**; this tests what each hook does once
 trusted, and says so. `paveo guard codex --selftest` checks the trust records on
 your own machine. In the GitHub Action, add `agent: codex` under `with:`.
+
+#### Cursor hooks
+
+`paveo test cursor` runs the same test on a project's Cursor hooks, read as
+Cursor's hooks page describes them (cursor.com/docs/agent/hooks, read 30 Oct
+2026). **It has not been checked against a real Cursor session yet.** It reads
+the organisation's `hooks.json` (`/Library/Application Support/Cursor/hooks.json`
+on macOS, `/etc/cursor/hooks.json` on Linux), `~/.cursor/hooks.json` and the
+project's `.cursor/hooks.json`, and every hook in them counts, since Cursor runs
+every matching hook and the strictest answer wins: deny over ask, ask over
+allow. It tests both hooks Cursor sends a shell command to:
+`beforeShellExecution`, whose matcher is a regex tested against the whole
+command, and `preToolUse`, whose matcher is tested against the tool's name,
+`Shell`. Each hook runs in `/bin/sh` (the page names no shell for macOS and
+Linux), a project's from the project root, a person's from `~/.cursor`, with
+`CURSOR_PROJECT_DIR` and `CLAUDE_PROJECT_DIR` set as Cursor sets them. The
+answers follow Cursor: exit 2, or `permission: "deny"` on exit 0, stops the
+command; `ask` is never counted as a stop: from `beforeShellExecution` Cursor
+asks the person, but its page does not say whether auto-run skips the question,
+so the run cannot tell, and from `preToolUse` Cursor does not enforce it yet;
+**JSON
+Cursor cannot read, or an answer outside its schema, stops the command too**,
+even without `failClosed`; any other failure (another exit, a crash, a timeout,
+nothing printed) lets it through unless the hook sets `failClosed: true`. An
+answer with no `permission` cannot be told, since the page does not say what
+Cursor does with one. A file whose `version` is not 1, a matcher in syntax that
+JavaScript and Python read differently, a matcher not tried within 5 seconds
+(all are compiled and tried in one separate, isolated Python, one at a time,
+the organisation's and your own before the project's, so a pattern that would
+take minutes cannot hang the run), a hook of a type Cursor
+does not know, a timeout that is not a positive number and `prompt` hooks are
+not run, and the run cannot tell. Hooks set in Cursor's
+team dashboard and plugins' hooks are not on disk, so they are not run; they can
+only stop more. **Cursor runs a project's hooks only in a trusted workspace**;
+this tests what each hook does once trusted, and says so when the project has
+hooks of its own. The 2 spellings that
+use Claude Code's Read tool are left out (66 in all). The example guard on
+Cursor's hooks page, a `beforeShellExecution` hook matching `rm -rf`, stops 9
+of the 19 shell spellings of a delete. In the GitHub Action, add
+`agent: cursor` under `with:`.
 
 **Codex.** Built against Codex's documented hook contract and its source, and
 **it has refused `rm -rf` in a real session** (macOS, 26 Sep 2026). It checks

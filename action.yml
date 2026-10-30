@@ -1,6 +1,6 @@
-# `uses: paveo-dev/paveo@v0.1.13`: run `paveo test` on this repository's Claude
-# Code hooks, or its Codex hooks, and fail the job when a dangerous action gets
-# past them (D106, D111).
+# `uses: paveo-dev/paveo@v0.1.14`: run `paveo test` on this repository's Claude
+# Code hooks, its Codex hooks or its Cursor hooks, and fail the job when a
+# dangerous action gets past them (D106, D111, D116).
 # Inputs reach the shell only as environment variables, never inside `run:`,
 # so nothing a workflow passes in can be run as a command.
 name: Paveo guard test
@@ -11,8 +11,8 @@ branding:
 inputs:
   agent:
     description: >-
-      Whose hooks to test: claude-code or codex (codex needs version 0.1.12 or
-      later).
+      Whose hooks to test: claude-code, codex or cursor (codex needs version
+      0.1.12 or later, cursor 0.1.14 or later).
     default: claude-code
   expect:
     description: >-
@@ -22,7 +22,7 @@ inputs:
     default: ""
   version:
     description: The paveo release to run, as x.y.z.
-    default: "0.1.13"
+    default: "0.1.14"
   json:
     description: Where to write the results as JSON.
     default: paveo-test.json

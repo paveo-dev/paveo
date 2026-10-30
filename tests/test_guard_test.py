@@ -25,6 +25,7 @@ import paveo
 from conftest import KNOWN_GAPS, SENTINEL
 from paveo._bypasses import ACTIONS, ORDINARY, VERSION
 from paveo._guard_test import (
+    CLAUDE_CODE,
     Handler,
     Run,
     _failure_notes,
@@ -1140,7 +1141,7 @@ def test_a_capped_hook_left_running_is_said_beside_its_cut_short_line() -> None:
     tally.timed_out.add(handler.where)
     tally.cut_short.add(handler.where)
     tally.left_running.add(handler.where)
-    (note,) = _failure_notes([handler], tally, title="Claude Code")
+    (note,) = _failure_notes([handler], tally, agent=CLAUDE_CODE)
     assert "cannot be told" in note
     assert "could not be stopped" in note
     assert "lets a call through" not in note

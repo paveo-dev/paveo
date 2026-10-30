@@ -316,6 +316,23 @@ wrong type) each make the run say it could not tell, never pass. A settings file
 past the parser's limit or a NUL byte in a command is reported, not a crash. Its output is read to 1 MiB and never printed, nor is its command
 (either can hold a token); only file paths are, with control characters escaped.
 `http` hooks are never run, so the command still opens no socket of its own.
+→ **Cursor (D116).** `paveo test cursor` runs the hooks in the organisation's,
+the person's and the project's Cursor `hooks.json`, each in `/bin/sh`, a person's
+from `~/.cursor` and an organisation's from its file's folder, as Cursor starts
+them. No answer it cannot be sure of counts as a stop here either: an ask, which
+auto-run may skip; an answer with no `permission`; a file whose `version` is not
+1; a matcher JavaScript and Python read differently; and a hook with no time
+limit of its own that our 10 seconds cut short each make the run say it could
+not tell. A matcher is a project's own regex, and Python's can backtrack for
+minutes even over the five letters of `Shell`, so paveo never compiles or tries
+one itself: one child Python (`-I`, so the project's files cannot stand in for
+`re`) compiles and tries them one at a time, the organisation's and the person's
+first whatever order the files are named in, answering a line each; the parent
+reads for 5 seconds, then ends it. Each matcher not answered by then makes the
+run unsure instead of hanging it. A matcher never
+tried reaches every call and cannot be told, so a skipped try fails closed. JSON Cursor cannot read
+counts as a stop because Cursor blocks on it; a hook that does that to every
+call also stops `git status`, which the run reports.
 → **Codex (D111).** `paveo test codex` runs the hooks in every Codex hook file it
 reads, `/etc/codex/config.toml` and `$CODEX_HOME` included, in `$SHELL -lc` as
 Codex does, so a login shell's start-up files run too, as they would under Codex.

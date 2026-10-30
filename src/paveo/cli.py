@@ -11,7 +11,7 @@
     paveo learn claude-code --from-history [PATH ...] [--dir .paveo]
     paveo evidence [--dir .paveo] [--since DATE] [--until DATE] [--out DIR]
     paveo doctor [--settings FILE ...]
-    paveo test [--expect ACTION ...] [--settings FILE ...]
+    paveo test [codex|cursor] [--expect ACTION ...] [--settings FILE ...]
 
 ``--dir`` holds three things, so the hook and the panic button cannot disagree
 about where they are: ``policy.json``, ``audit.jsonl`` and, while stopped,
@@ -232,6 +232,14 @@ def _claude_home() -> Path:
     """Where Claude Code keeps its own files: ``$CLAUDE_CONFIG_DIR`` when it is
     set (environment variables page, read 20 Oct 2026), else ~/.claude."""
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+
+
+# Where Cursor reads an organisation's hooks file (its hooks page).
+_CURSOR_ORGANISATION = (
+    Path("/Library/Application Support/Cursor/hooks.json")
+    if sys.platform == "darwin"
+    else Path("/etc/cursor/hooks.json")
+)
 
 
 def _codex_home() -> Path:
@@ -591,20 +599,34 @@ def _test(arguments: argparse.Namespace) -> int:
     # Imported here: only this command starts the project's hooks, and the
     # guard, which runs on every call, should not load what does it.
     try:
-        from . import _bypasses, _codex_hooks, _guard_test  # noqa: PLC0415
+        from . import (  # noqa: PLC0415
+            _bypasses,
+            _codex_hooks,
+            _cursor_hooks,
+            _guard_test,
+        )
     except ConfigError as e:
         sys.stderr.write(f"paveo: {e}\n")
         return 2
     project = Path.cwd()
     codex = arguments.harness == CODEX.name
+    cursor = arguments.harness == CURSOR.name
     # Codex sets no project variable (D57): a hook that reads Claude Code's is
     # run without it, as Codex would run it, even when the shell running the
     # test already has it, as inside a Claude Code session (/code-review).
+    # Cursor sets its own and Claude Code's, as an alias (its hooks page).
     env = dict(os.environ)
     if codex:
         env.pop("CLAUDE_PROJECT_DIR", None)
     else:
         env["CLAUDE_PROJECT_DIR"] = str(project)
+    if cursor:
+        env |= {"CURSOR_PROJECT_DIR": str(project), "CURSOR_VERSION": "paveo-test"}
+    agent: _guard_test.Agent | None = None  # Claude Code, the default
+    if codex:
+        agent = _codex_hooks.agent(env.get("SHELL") or "/bin/sh")
+    elif cursor:
+        agent = _cursor_hooks.agent()
     names = [action.name for action in _bypasses.ACTIONS]
     unknown = sorted(set(arguments.expect or []) - set(names))
     if unknown:
@@ -635,6 +657,8 @@ def _test(arguments: argparse.Namespace) -> int:
                 system / "config.toml",
                 *_codex_hooks.files(project, _codex_home()),
             ]
+        elif cursor:
+            files = _cursor_hooks.files(project, Path.home(), _CURSOR_ORGANISATION)
         else:
             files = _hook_files(CLAUDE_CODE, project)
         return _guard_test.command(
@@ -647,10 +671,11 @@ def _test(arguments: argparse.Namespace) -> int:
             run=partial(
                 _guard_test.run_handler, project=project, env=env, read_stderr=codex
             ),
-            managed=_managed(codex=codex),
+            # Cursor's organisation file is a hooks file, read and run above.
+            managed=[] if cursor else _managed(codex=codex),
             named=bool(arguments.settings),
             record=record,
-            agent=_codex_hooks.agent(env.get("SHELL") or "/bin/sh") if codex else None,
+            agent=agent,
         )
 
 
@@ -747,7 +772,7 @@ def _parser() -> argparse.ArgumentParser:
         "harness",
         nargs="?",
         default=CLAUDE_CODE.name,
-        choices=[CLAUDE_CODE.name, CODEX.name],
+        choices=[CLAUDE_CODE.name, CODEX.name, CURSOR.name],
         help="the agent whose hooks to test (default: claude-code)",
     )
     test.add_argument(
